@@ -29,7 +29,7 @@ const nextConfig: NextConfig = {
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "font-src 'self' https://fonts.gstatic.com",
               "img-src 'self' data: blob: https://images.unsplash.com https://plus.unsplash.com https://randomuser.me",
-              "connect-src 'self'",
+              "connect-src 'self' http://localhost:4000 ws://localhost:3000",
               "frame-ancestors 'none'",
             ].join("; "),
           },
