@@ -3,30 +3,54 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Globe, Eye, EyeOff, Mail, Lock, ArrowRight, Shield } from "lucide-react";
+import { authApi } from "@/lib/api";
 
 export default function LoginPage() {
   const [showPass, setShowPass] = useState(false);
   const [step, setStep] = useState<"login" | "2fa">("login");
   const [form, setForm] = useState({ email: "", password: "", remember: false, code: "" });
   const [loading, setLoading] = useState(false);
+  const [tempToken, setTempToken] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setTimeout(() => {
+    setErrorMsg("");
+    try {
+      const result = await authApi.login({
+        email: form.email,
+        password: form.password,
+      });
+
+      if (result.require2Fa) {
+        setTempToken(result.tempToken);
+        setStep("2fa");
+      } else {
+        // Successful login, redirect to dashboard
+        window.location.href = "/dashboard";
+      }
+    } catch (err: any) {
+      setErrorMsg(err.message || "Invalid email or password. Please try again.");
+    } finally {
       setLoading(false);
-      setStep("2fa");
-    }, 1000);
+    }
   };
 
-  const handle2FA = (e: React.FormEvent) => {
+  const handle2FA = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
+    setErrorMsg("");
+    try {
+      await authApi.authenticate2Fa(tempToken, form.code);
       window.location.href = "/dashboard";
-    }, 1000);
+    } catch (err: any) {
+      setErrorMsg(err.message || "Invalid 2FA verification code.");
+    } finally {
+      setLoading(false);
+    }
   };
+
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
@@ -91,6 +115,12 @@ export default function LoginPage() {
                   Sign in to your account to continue
                 </p>
               </div>
+
+              {errorMsg && (
+                <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+                  {errorMsg}
+                </div>
+              )}
 
               <form onSubmit={handleLogin} className="space-y-5">
                 <div>
@@ -193,6 +223,12 @@ export default function LoginPage() {
                   Enter the 6-digit code from your authenticator app or sent to your phone.
                 </p>
               </div>
+
+              {errorMsg && (
+                <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+                  {errorMsg}
+                </div>
+              )}
 
               <form onSubmit={handle2FA} className="space-y-5">
                 <div>

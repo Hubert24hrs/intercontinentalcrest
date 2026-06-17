@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Globe, Eye, EyeOff, Mail, Lock, User, Phone, ArrowRight, Shield, CheckCircle2 } from "lucide-react";
+import { authApi } from "@/lib/api";
 
 const steps = ["Personal Info", "Contact & Security", "Verify"];
 
@@ -53,18 +54,45 @@ export default function RegisterPage() {
   const [step, setStep] = useState(0);
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
   const [form, setForm] = useState({
     firstName: "", lastName: "", dob: "",
     email: "", phone: "", password: "", confirmPassword: "",
     terms: false, emailCode: "", phoneCode: "",
   });
 
-  const handleNext = (e: React.FormEvent) => {
+  const handleNext = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (step < steps.length - 1) setStep(step + 1);
-    else {
+    setErrorMsg("");
+
+    if (step < steps.length - 1) {
+      if (step === 1 && form.password !== form.confirmPassword) {
+        setErrorMsg("Passwords do not match.");
+        return;
+      }
+      setStep(step + 1);
+    } else {
       setLoading(true);
-      setTimeout(() => { window.location.href = "/dashboard"; }, 1500);
+      try {
+        await authApi.register({
+          fullName: `${form.firstName} ${form.lastName}`,
+          email: form.email,
+          password: form.password,
+          phone: form.phone,
+        });
+
+        // Auto-login after successful registration
+        await authApi.login({
+          email: form.email,
+          password: form.password,
+        });
+
+        window.location.href = "/dashboard";
+      } catch (err: any) {
+        setErrorMsg(err.message || "Registration failed. Please check your inputs.");
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
@@ -141,6 +169,12 @@ export default function RegisterPage() {
               {step === 0 ? "Join millions of customers worldwide." : step === 1 ? "Secure your account with a strong password." : "Enter the codes sent to your email and phone."}
             </p>
           </div>
+
+          {errorMsg && (
+            <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-600 font-medium">
+              {errorMsg}
+            </div>
+          )}
 
           <form onSubmit={handleNext} className="space-y-4">
             {step === 0 && (

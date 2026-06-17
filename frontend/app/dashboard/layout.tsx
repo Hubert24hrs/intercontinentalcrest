@@ -1,12 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Globe, LayoutDashboard, ArrowLeftRight, Receipt, Users, PiggyBank,
-  TrendingUp, Bell, Settings, LogOut, Menu, X, ChevronDown, User
+  TrendingUp, Bell, Settings, LogOut, Menu, X, ChevronDown, User, Loader2
 } from "lucide-react";
+import { authApi } from "@/lib/api";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Overview", href: "/dashboard" },
@@ -21,7 +22,30 @@ const navItems = [
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
   const pathname = usePathname();
+
+  useEffect(() => {
+    authApi.me()
+      .then(res => {
+        setUser(res.user);
+        setLoading(false);
+      })
+      .catch(() => {
+        // Token missing or expired - redirect to login
+        window.location.href = "/login";
+      });
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      await authApi.logout();
+    } catch (e) {
+      console.error("Logout failed", e);
+    }
+    window.location.href = "/login";
+  };
 
   const notifications = [
     { id: 1, text: "Transfer of $500 completed", time: "2 min ago", read: false },
@@ -29,6 +53,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     { id: 3, text: "Monthly statement is ready", time: "1 day ago", read: true },
     { id: 4, text: "KYC verification approved", time: "2 days ago", read: true },
   ];
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-brand-dark flex flex-col items-center justify-center text-white">
+        <div className="w-12 h-12 rounded-full bg-gradient-to-br from-brand-primary to-brand-accent flex items-center justify-center mb-4 animate-pulse">
+          <Globe className="w-6 h-6 text-white" />
+        </div>
+        <div className="flex items-center gap-2 text-sm text-gray-400">
+          <Loader2 className="w-4 h-4 animate-spin text-brand-primary" />
+          Verifying security credentials...
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
@@ -53,17 +91,21 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* User info */}
         <div className="p-5 border-b border-white/10">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-brand-primary flex items-center justify-center flex-shrink-0">
-              <User className="w-5 h-5 text-white" />
+            <div className="w-10 h-10 rounded-full bg-brand-primary/20 flex items-center justify-center flex-shrink-0">
+              <User className="w-5 h-5 text-brand-primary" />
             </div>
-            <div>
-              <div className="font-semibold text-white text-sm">John Doe</div>
-              <div className="text-gray-400 text-xs">Personal Account</div>
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-white text-sm truncate" title={user?.fullName}>
+                {user?.fullName || "Client"}
+              </div>
+              <div className="text-gray-400 text-[10px] truncate" title={user?.email}>
+                {user?.email || "Personal Account"}
+              </div>
             </div>
           </div>
           <div className="mt-3 bg-white/5 rounded-lg px-3 py-2">
             <div className="text-gray-400 text-xs">Account No.</div>
-            <div className="text-brand-primary font-mono text-sm font-bold">IC-7842-0021</div>
+            <div className="text-brand-primary font-mono text-xs font-bold">IC-8812-9014</div>
           </div>
         </div>
 
@@ -91,13 +133,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Logout */}
         <div className="p-4 border-t border-white/10">
-          <Link
-            href="/login"
-            className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-gray-400 hover:bg-red-500/10 hover:text-red-400 transition-all duration-200"
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-gray-400 hover:bg-red-500/10 hover:text-red-400 transition-all duration-200 w-full text-left"
           >
             <LogOut className="w-5 h-5 flex-shrink-0" />
             Sign Out
-          </Link>
+          </button>
         </div>
       </aside>
 
@@ -124,7 +166,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </button>
               <div>
                 <div className="text-xs text-gray-500">Welcome back,</div>
-                <div className="font-display font-bold text-brand-secondary text-sm">John Doe</div>
+                <div className="font-display font-bold text-brand-secondary text-sm">{user?.fullName || "Client"}</div>
               </div>
             </div>
 

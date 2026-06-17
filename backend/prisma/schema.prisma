@@ -1,0 +1,197 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Enums are represented as Strings in SQLite
+
+model User {
+  id                   String        @id @default(uuid())
+  fullName             String        @map("full_name")
+  email                String        @unique
+  phone                String?       @unique
+  passwordHash         String        @map("password_hash")
+  role                 String        @default("customer") // customer, admin, super_admin, support
+  status               String        @default("active") // active, suspended, inactive, pending_verification
+  emailVerified        Boolean       @default(false) @map("email_verified")
+  phoneVerified        Boolean       @default(false) @map("phone_verified")
+  twoFactorEnabled     Boolean       @default(false) @map("two_factor_enabled")
+  twoFactorSecret      String?       @map("two_factor_secret")
+  failedLoginAttempts  Int           @default(0) @map("failed_login_attempts")
+  lockedUntil          DateTime?     @map("locked_until")
+  lastLogin            DateTime?     @map("last_login")
+  createdAt            DateTime      @default(now()) @map("created_at")
+  updatedAt            DateTime      @updatedAt @map("updated_at")
+  
+  accounts             Account[]
+  beneficiaries        Beneficiary[]
+  kycDocuments         KycDocument[] @relation("KycDocuments")
+  reviewedKycDocuments KycDocument[] @relation("KycReviewer")
+  loans                Loan[]        @relation("LoanCustomer")
+  approvedLoans        Loan[]        @relation("LoanApprover")
+  investments          Investment[]
+  notifications        Notification[]
+  auditLogs            AuditLog[]
+
+  @@map("users")
+}
+
+model Account {
+  id               String       @id @default(uuid())
+  accountNumber    String       @unique @map("account_number")
+  userId           String       @map("user_id")
+  accountType      String       @default("checking") @map("account_type") // savings, checking, business, investment
+  balance          Decimal      @default(0.00)
+  availableBalance Decimal      @default(0.00) @map("available_balance")
+  currency         String       @default("USD")
+  isFrozen         Boolean      @default(false) @map("is_frozen")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sentTransfers    Transaction[] @relation("SenderAccount")
+  receivedTransfers Transaction[] @relation("ReceiverAccount")
+  loans            Loan[]
+
+  @@map("accounts")
+}
+
+model Transaction {
+  id                   String            @id @default(uuid())
+  transactionReference String            @unique @map("transaction_reference")
+  senderAccountId      String?           @map("sender_account_id")
+  receiverAccountId    String?           @map("receiver_account_id")
+  amount               Decimal
+  fee                  Decimal           @default(0.00)
+  currency             String            @default("USD")
+  status               String            @default("pending") // pending, completed, failed, reversed
+  type                 String
+  description          String?
+  metadata             String?           // Stored as serialized JSON string in SQLite
+  ipAddress            String?           @map("ip_address")
+  createdAt            DateTime          @default(now()) @map("created_at")
+  updatedAt            DateTime          @updatedAt @map("updated_at")
+
+  senderAccount        Account?          @relation("SenderAccount", fields: [senderAccountId], references: [id])
+  receiverAccount      Account?          @relation("ReceiverAccount", fields: [receiverAccountId], references: [id])
+
+  @@map("transactions")
+}
+
+model Beneficiary {
+  id              String   @id @default(uuid())
+  userId          String   @map("user_id")
+  beneficiaryName String   @map("beneficiary_name")
+  accountNumber   String   @map("account_number")
+  bankName        String?  @map("bank_name")
+  bankCode        String?  @map("bank_code")
+  swiftCode       String?  @map("swift_code")
+  iban            String?
+  currency        String   @default("USD")
+  country         String?
+  isInternational Boolean  @default(false) @map("is_international")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("beneficiaries")
+}
+
+model KycDocument {
+  id                 String    @id @default(uuid())
+  userId             String    @map("user_id")
+  status             String    @default("pending") // not_submitted, pending, approved, rejected
+  documentType       String    @map("document_type")
+  documentFrontUrl   String?   @map("document_front_url")
+  documentBackUrl    String?   @map("document_back_url")
+  selfieUrl          String?   @map("selfie_url")
+  proofOfAddressUrl  String?   @map("proof_of_address_url")
+  reviewerId         String?   @map("reviewer_id")
+  reviewerNotes      String?   @map("reviewer_notes")
+  reviewedAt         DateTime? @map("reviewed_at")
+  submittedAt        DateTime  @default(now()) @map("submitted_at")
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  user               User      @relation("KycDocuments", fields: [userId], references: [id], onDelete: Cascade)
+  reviewer           User?     @relation("KycReviewer", fields: [reviewerId], references: [id])
+
+  @@map("kyc_documents")
+}
+
+model Loan {
+  id                 String     @id @default(uuid())
+  userId             String     @map("user_id")
+  accountId          String?    @map("account_id")
+  loanType           String     @map("loan_type")
+  principalAmount    Decimal    @map("principal_amount")
+  interestRate       Decimal    @map("interest_rate")
+  termMonths         Int        @map("term_months")
+  monthlyPayment     Decimal?   @map("monthly_payment")
+  outstandingBalance Decimal?   @map("outstanding_balance")
+  status             String     @default("pending") // pending, approved, active, completed, defaulted, rejected
+  approvedBy         String?    @map("approved_by")
+  approvedAt         DateTime?  @map("approved_at")
+  disbursedAt        DateTime?  @map("disbursed_at")
+  dueDate            DateTime?  @map("due_date")
+  createdAt          DateTime   @default(now()) @map("created_at")
+  updatedAt          DateTime   @updatedAt @map("updated_at")
+
+  user               User       @relation("LoanCustomer", fields: [userId], references: [id], onDelete: Cascade)
+  account            Account?   @relation(fields: [accountId], references: [id])
+  approver           User?      @relation("LoanApprover", fields: [approvedBy], references: [id])
+
+  @@map("loans")
+}
+
+model Investment {
+  id              String    @id @default(uuid())
+  userId          String    @map("user_id")
+  planName        String    @map("plan_name")
+  principalAmount Decimal    @map("principal_amount")
+  currentValue    Decimal?   @map("current_value")
+  interestRate    Decimal?   @map("interest_rate")
+  startDate       DateTime?  @map("start_date")
+  maturityDate    DateTime?  @map("maturity_date")
+  status          String     @default("active")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
+
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("investments")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  title     String
+  message   String
+  type      String   @default("info")
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?  @map("user_id")
+  action     String
+  entityType String?  @map("entity_type")
+  entityId   String?  @map("entity_id")
+  oldValues  String?  @map("old_values")   // Stored as serialized JSON string in SQLite
+  newValues  String?  @map("new_values")   // Stored as serialized JSON string in SQLite
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user       User?    @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}

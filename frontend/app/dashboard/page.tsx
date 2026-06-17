@@ -123,7 +123,7 @@ export default function DashboardPage() {
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={(v: number) => [`$${v.toLocaleString()}`, "Balance"]} contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12 }} />
+              <Tooltip formatter={(v: any) => [`$${Number(v).toLocaleString()}`, "Balance"]} contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12 }} />
               <Line type="monotone" dataKey="balance" stroke="#00B7F1" strokeWidth={2.5} dot={{ fill: "#00B7F1", r: 4 }} activeDot={{ r: 6 }} />
             </LineChart>
           </ResponsiveContainer>
@@ -142,7 +142,7 @@ export default function DashboardPage() {
                   <Cell key={i} fill={entry.color} />
                 ))}
               </Pie>
-              <Tooltip formatter={(v: number) => [`${v}%`, "Share"]} contentStyle={{ borderRadius: 12, fontSize: 11 }} />
+              <Tooltip formatter={(v: any) => [`${v}%`, "Share"]} contentStyle={{ borderRadius: 12, fontSize: 11 }} />
             </PieChart>
           </ResponsiveContainer>
           <div className="mt-3 space-y-2">
@@ -178,7 +178,7 @@ export default function DashboardPage() {
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
               <XAxis dataKey="month" tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 11, fill: "#94a3b8" }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
-              <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12 }} formatter={(v: number) => [`$${v.toLocaleString()}`]} />
+              <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid #e2e8f0", fontSize: 12 }} formatter={(v: any) => [`$${Number(v).toLocaleString()}`]} />
               <Bar dataKey="income" fill="#00B7F1" radius={[4, 4, 0, 0]} />
               <Bar dataKey="expense" fill="#0A2342" radius={[4, 4, 0, 0]} />
             </BarChart>
