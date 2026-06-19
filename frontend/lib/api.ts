@@ -395,6 +395,10 @@ export const cryptoApi = {
     });
   },
 
+  getMyOrders: (page: number = 1, limit: number = 20) => {
+    return request(`/crypto/orders/me?page=${page}&limit=${limit}`);
+  },
+
   // Admin Crypto
   getAllOrders: (page: number = 1, limit: number = 50) => {
     return request(`/crypto/admin/orders?page=${page}&limit=${limit}`);

@@ -533,6 +533,20 @@ export class CryptoService {
     return result;
   }
 
+  async getMyOrders(userId: string, page: number = 1, limit: number = 20) {
+    const skip = (page - 1) * limit;
+    const [orders, total] = await Promise.all([
+      this.prisma.cryptoOrder.findMany({
+        where: { userId },
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.cryptoOrder.count({ where: { userId } }),
+    ]);
+    return { orders, total, page, limit, totalPages: Math.ceil(total / limit) };
+  }
+
   // ── Admin endpoints ────────────────────────────────────────────────────────────
 
   async getAllOrders(page: number = 1, limit: number = 50) {

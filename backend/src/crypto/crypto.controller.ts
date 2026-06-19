@@ -69,6 +69,19 @@ export class CryptoController {
     return this.cryptoService.sellCrypto(req.user.id, dto);
   }
 
+  @Get('orders/me')
+  async getMyOrders(
+    @Req() req: any,
+    @Query('page') page: string = '1',
+    @Query('limit') limit: string = '20',
+  ) {
+    return this.cryptoService.getMyOrders(
+      req.user.id,
+      parseInt(page, 10),
+      parseInt(limit, 10),
+    );
+  }
+
   // Admin routes
   @Get('admin/orders')
   async getAllOrders(
