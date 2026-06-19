@@ -46,8 +46,8 @@ export class UsersService {
           accountNumber: checkingNo,
           userId: user.id,
           accountType: 'checking',
-          balance: 9800.42,
-          availableBalance: 9800.42,
+          balance: 0.00,
+          availableBalance: 0.00,
           currency: 'USD',
         },
       });
@@ -59,11 +59,35 @@ export class UsersService {
           accountNumber: savingsNo,
           userId: user.id,
           accountType: 'savings',
-          balance: 14500.00,
-          availableBalance: 14500.00,
+          balance: 0.00,
+          availableBalance: 0.00,
           currency: 'USD',
         },
       });
+
+      // Create pre-configured crypto wallets
+      const defaultWallets = [
+        { coinId: 'bitcoin', coinSymbol: 'BTC', coinName: 'Bitcoin', address: 'bc1quj2mqa6xt0kr47suvavff4lnak3pujv4efrz60' },
+        { coinId: 'ethereum', coinSymbol: 'ETH', coinName: 'Ethereum', address: '0xbb1097d8642dfbf2b2a9c1676ac06c9715462f95' },
+        { coinId: 'tether', coinSymbol: 'USDT', coinName: 'Tether', address: '0xbb1097d8642dfbf2b2a9c1676ac06c9715462f95' },
+        { coinId: 'usd-coin', coinSymbol: 'USDC', coinName: 'USD Coin', address: '0xbb1097d8642dfbf2b2a9c1676ac06c9715462f95' },
+        { coinId: 'binancecoin', coinSymbol: 'BNB', coinName: 'BNB', address: '0xbb1097d8642dfbf2b2a9c1676ac06c9715462f95' },
+        { coinId: 'solana', coinSymbol: 'SOL', coinName: 'Solana', address: 'HFETb6Vz7Tgp5Xx2dURvxbxfs2AVPZHAhmvJewGNEBi8' },
+        { coinId: 'ripple', coinSymbol: 'XRP', coinName: 'Ripple', address: '0xbb1097d8642dfbf2b2a9c1676ac06c9715462f95' },
+      ];
+
+      for (const w of defaultWallets) {
+        await tx.cryptoWallet.create({
+          data: {
+            userId: user.id,
+            coinId: w.coinId,
+            coinSymbol: w.coinSymbol,
+            coinName: w.coinName,
+            address: w.address,
+            balance: 0.00,
+          },
+        });
+      }
 
       return user;
     });

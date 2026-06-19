@@ -6,12 +6,14 @@ import { LoginDto } from './dto/login.dto';
 import * as bcrypt from 'bcrypt';
 import { authenticator } from 'otplib';
 import * as qrcode from 'qrcode';
+import { EmailService } from '../notifications/email.service';
 
 @Injectable()
 export class AuthService {
   constructor(
     private usersService: UsersService,
     private jwtService: JwtService,
+    private emailService: EmailService,
   ) {}
 
   async register(registerDto: RegisterDto) {
@@ -24,6 +26,19 @@ export class AuthService {
       phone: registerDto.phone,
       passwordHash,
     });
+
+    // Send congratulatory account opening email
+    try {
+      const { text, html } = this.emailService.getWelcomeEmailTemplate(user.fullName);
+      await this.emailService.sendEmail({
+        to: user.email,
+        subject: 'Welcome to Intercontinental Crest — Account Opened Successfully!',
+        text,
+        html,
+      });
+    } catch (err) {
+      console.error('Failed to send welcome email:', err);
+    }
 
     return {
       id: user.id,

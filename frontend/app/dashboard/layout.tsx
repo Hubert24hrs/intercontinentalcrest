@@ -5,17 +5,22 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Globe, LayoutDashboard, ArrowLeftRight, Receipt, Users, PiggyBank,
-  TrendingUp, Bell, Settings, LogOut, Menu, X, ChevronDown, User, Loader2
+  TrendingUp, Bell, Settings, LogOut, Menu, X, ChevronDown, User, Loader2, Coins, Briefcase, ScrollText, Wallet, Landmark
 } from "lucide-react";
-import { authApi } from "@/lib/api";
+import { authApi, notificationsApi } from "@/lib/api";
+import { io } from "socket.io-client";
+import { motion, AnimatePresence } from "framer-motion";
 
 const navItems = [
   { icon: LayoutDashboard, label: "Overview", href: "/dashboard" },
   { icon: ArrowLeftRight, label: "Transfer Funds", href: "/dashboard/transfer" },
   { icon: Receipt, label: "Bill Payments", href: "/dashboard/bills" },
-  { icon: Users, label: "Beneficiaries", href: "/dashboard/beneficiaries" },
+  { icon: Landmark, label: "Loans", href: "/dashboard/loans" },
+  { icon: Coins, label: "Crypto Marketplace", href: "/dashboard/crypto" },
+  { icon: Wallet, label: "Crypto Wallets", href: "/dashboard/wallets" },
+  { icon: Briefcase, label: "Investment", href: "/dashboard/investments" },
   { icon: PiggyBank, label: "Transactions", href: "/dashboard/transactions" },
-  { icon: TrendingUp, label: "Statements", href: "/dashboard/statements" },
+  { icon: ScrollText, label: "Statements", href: "/dashboard/statements" },
   { icon: Settings, label: "Settings", href: "/dashboard/settings" },
 ];
 
@@ -24,6 +29,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [notifOpen, setNotifOpen] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [toast, setToast] = useState<{ id: string; title: string; message: string; type: string } | null>(null);
   const pathname = usePathname();
 
   useEffect(() => {
@@ -38,6 +45,59 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       });
   }, []);
 
+  useEffect(() => {
+    if (!user) return;
+    notificationsApi.getMyNotifications()
+      .then(res => {
+        setNotifications(res || []);
+      })
+      .catch(err => {
+        console.error("Failed to fetch notifications:", err);
+      });
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+
+    // Connect to WebSocket Gateway running on NestJS server (port 4000)
+    const socket = io("http://localhost:4000", {
+      query: { userId: user.id },
+      transports: ["websocket"],
+    });
+
+    socket.on("connect", () => {
+      console.log("WebSocket client connected to Gateway");
+    });
+
+    socket.on("notification", (newNotif: any) => {
+      console.log("Real-time notification received:", newNotif);
+      setNotifications(prev => [newNotif, ...prev]);
+      setToast({
+        id: newNotif.id,
+        title: newNotif.title || "Notification Received",
+        message: newNotif.message,
+        type: newNotif.type || "info",
+      });
+    });
+
+    socket.on("disconnect", () => {
+      console.log("WebSocket client disconnected");
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (toast) {
+      const timer = setTimeout(() => {
+        setToast(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [toast]);
+
   const handleLogout = async () => {
     try {
       await authApi.logout();
@@ -47,12 +107,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     window.location.href = "/login";
   };
 
-  const notifications = [
-    { id: 1, text: "Transfer of $500 completed", time: "2 min ago", read: false },
-    { id: 2, text: "New login from Chrome, Windows", time: "1 hr ago", read: false },
-    { id: 3, text: "Monthly statement is ready", time: "1 day ago", read: true },
-    { id: 4, text: "KYC verification approved", time: "2 days ago", read: true },
-  ];
+  const handleMarkAllRead = async () => {
+    try {
+      await notificationsApi.markAllAsRead();
+      setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    } catch (e) {
+      console.error("Failed to mark all notifications as read:", e);
+    }
+  };
+
+  const handleMarkRead = async (id: string) => {
+    try {
+      await notificationsApi.markAsRead(id);
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n));
+    } catch (e) {
+      console.error(`Failed to mark notification ${id} as read:`, e);
+    }
+  };
 
   if (loading) {
     return (
@@ -129,6 +200,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               </Link>
             );
           })}
+          {user && (user.role === "admin" || user.role === "super_admin") && (
+            <Link
+              href="/admin/customers"
+              className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-brand-primary bg-brand-primary/10 hover:bg-brand-primary hover:text-white transition-all duration-200 mt-4"
+            >
+              <Globe className="w-5 h-5 flex-shrink-0" />
+              Admin Portal
+            </Link>
+          )}
         </nav>
 
         {/* Logout */}
@@ -175,31 +255,52 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <div className="relative">
                 <button
                   onClick={() => setNotifOpen(!notifOpen)}
-                  className="relative p-2 rounded-xl hover:bg-gray-100 transition-colors"
+                  className="relative p-2 rounded-xl hover:bg-gray-100 transition-colors cursor-pointer"
                   aria-label="Notifications"
                   id="notif-btn"
                 >
                   <Bell className="w-5 h-5 text-gray-600" />
-                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full"></span>
+                  {notifications.some(n => !n.isRead) && (
+                    <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full"></span>
+                  )}
                 </button>
                 {notifOpen && (
                   <div className="absolute right-0 top-full mt-2 w-80 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden z-50">
                     <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
                       <span className="font-display font-bold text-brand-secondary text-sm">Notifications</span>
-                      <span className="text-xs text-brand-primary font-medium cursor-pointer">Mark all read</span>
+                      {notifications.some(n => !n.isRead) && (
+                        <button
+                          onClick={handleMarkAllRead}
+                          className="text-xs text-brand-primary font-medium cursor-pointer hover:underline"
+                        >
+                          Mark all read
+                        </button>
+                      )}
                     </div>
                     <div className="divide-y divide-gray-50 max-h-72 overflow-y-auto">
                       {notifications.map((n) => (
-                        <div key={n.id} className={`px-4 py-3 text-sm ${n.read ? "opacity-60" : ""}`}>
+                        <div
+                          key={n.id}
+                          onClick={() => !n.isRead && handleMarkRead(n.id)}
+                          className={`px-4 py-3 text-sm hover:bg-gray-50/80 transition-colors cursor-pointer text-left ${n.isRead ? "opacity-60" : ""}`}
+                        >
                           <div className="flex items-start gap-2">
-                            <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${n.read ? "bg-gray-300" : "bg-brand-primary"}`} />
-                            <div>
-                              <div className="text-gray-800 text-xs">{n.text}</div>
-                              <div className="text-gray-400 text-xs mt-0.5">{n.time}</div>
+                            <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${n.isRead ? "bg-gray-300" : "bg-brand-primary"}`} />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-gray-800 text-xs font-semibold">{n.title}</div>
+                              <div className="text-gray-600 text-[11px] mt-0.5 leading-tight">{n.message}</div>
+                              <div className="text-gray-400 text-[9px] mt-0.5">
+                                {new Date(n.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} — {new Date(n.createdAt).toLocaleDateString()}
+                              </div>
                             </div>
                           </div>
                         </div>
                       ))}
+                      {notifications.length === 0 && (
+                        <div className="px-4 py-6 text-center text-gray-400 text-xs">
+                          No notifications yet
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -214,10 +315,79 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </header>
 
         {/* Page content */}
-        <main className="flex-1 p-6 overflow-auto">
+        <main className="flex-1 p-6 overflow-auto pb-24 lg:pb-6">
           {children}
         </main>
       </div>
+
+      {/* Bottom navigation bar for mobile users (premium US-banking look) */}
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-gray-200/80 py-2 px-6 flex items-center justify-between z-40 shadow-[0_-10px_25px_-5px_rgba(0,0,0,0.08)] rounded-t-3xl">
+        {[
+          { label: "Home", href: "/dashboard", icon: LayoutDashboard },
+          { label: "Transfer", href: "/dashboard/transfer", icon: ArrowLeftRight },
+          { label: "Crypto", href: "/dashboard/crypto", icon: Coins },
+          { label: "Wallets", href: "/dashboard/wallets", icon: Wallet },
+        ].map((item) => {
+          const active = pathname === item.href;
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex flex-col items-center gap-1 text-[10px] font-bold transition-colors ${
+                active ? "text-brand-primary" : "text-gray-400 hover:text-gray-600"
+              }`}
+            >
+              <item.icon className={`w-5 h-5 transition-transform ${active ? "scale-110" : ""}`} />
+              <span>{item.label}</span>
+            </Link>
+          );
+        })}
+        {/* Menu toggle for remaining options */}
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="flex flex-col items-center gap-1 text-[10px] font-bold text-gray-400 hover:text-gray-600 cursor-pointer"
+        >
+          <Menu className="w-5 h-5" />
+          <span>Menu</span>
+        </button>
+      </nav>
+
+      {/* Live Toast Notification */}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9, y: 20 }}
+            transition={{ type: "spring", stiffness: 300, damping: 25 }}
+            className="fixed bottom-6 right-6 z-[9999] max-w-sm w-full bg-[#0A2342] text-white rounded-2xl shadow-2xl border border-white/10 p-4"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-full bg-brand-primary/20 flex items-center justify-center flex-shrink-0">
+                <Bell className="w-4 h-4 text-brand-primary" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-semibold text-brand-primary uppercase tracking-wider">{toast.title}</div>
+                <div className="text-sm font-medium mt-1 text-white/90 leading-snug">{toast.message}</div>
+              </div>
+              <button onClick={() => setToast(null)} className="text-white/40 hover:text-white transition-colors cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <button
+                onClick={() => {
+                  handleMarkRead(toast.id);
+                  setToast(null);
+                }}
+                className="text-[10px] text-brand-primary font-bold hover:underline cursor-pointer"
+              >
+                Dismiss
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

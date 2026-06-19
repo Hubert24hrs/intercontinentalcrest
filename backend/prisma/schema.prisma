@@ -36,8 +36,47 @@ model User {
   investments          Investment[]
   notifications        Notification[]
   auditLogs            AuditLog[]
+  cryptoHoldings       CryptoHolding[]
+  cryptoOrders         CryptoOrder[]
+  cryptoWallets        CryptoWallet[]
 
   @@map("users")
+}
+
+model CryptoHolding {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  coinId      String   @map("coin_id")       // e.g. "bitcoin"
+  coinSymbol  String   @map("coin_symbol")   // e.g. "BTC"
+  coinName    String   @map("coin_name")     // e.g. "Bitcoin"
+  quantity    Decimal
+  avgBuyPrice Decimal  @map("avg_buy_price") // weighted average cost
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, coinId])
+  @@map("crypto_holdings")
+}
+
+model CryptoOrder {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  coinId      String   @map("coin_id")
+  coinSymbol  String   @map("coin_symbol")
+  coinName    String   @map("coin_name")
+  type        String                        // "buy" | "sell"
+  quantity    Decimal
+  priceAtTime Decimal  @map("price_at_time") // USD price per coin at execution
+  totalUsd    Decimal  @map("total_usd")
+  fee         Decimal  @default(0.00)
+  status      String   @default("completed") // completed | failed
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("crypto_orders")
 }
 
 model Account {
@@ -195,3 +234,21 @@ model AuditLog {
 
   @@map("audit_logs")
 }
+
+model CryptoWallet {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  coinId      String   @map("coin_id")       // e.g. "bitcoin"
+  coinSymbol  String   @map("coin_symbol")   // e.g. "BTC"
+  coinName    String   @map("coin_name")     // e.g. "Bitcoin"
+  address     String
+  balance     Decimal  @default(0.00)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, coinId])
+  @@map("crypto_wallets")
+}
+

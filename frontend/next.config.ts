@@ -1,11 +1,14 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  devIndicators: false,
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "images.unsplash.com" },
       { protocol: "https", hostname: "plus.unsplash.com" },
       { protocol: "https", hostname: "randomuser.me" },
+      { protocol: "https", hostname: "coin-images.coingecko.com" },
+      { protocol: "https", hostname: "assets.coingecko.com" },
     ],
   },
   async headers() {
@@ -28,7 +31,7 @@ const nextConfig: NextConfig = {
               "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "font-src 'self' https://fonts.gstatic.com",
-              "img-src 'self' data: blob: https://images.unsplash.com https://plus.unsplash.com https://randomuser.me",
+              "img-src 'self' data: blob: https://images.unsplash.com https://plus.unsplash.com https://randomuser.me https://coin-images.coingecko.com https://assets.coingecko.com",
               "connect-src 'self' http://localhost:4000 ws://localhost:3000",
               "frame-ancestors 'none'",
             ].join("; "),
