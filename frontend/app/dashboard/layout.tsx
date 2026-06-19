@@ -34,15 +34,23 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
 
   useEffect(() => {
+    // Bail out after 12 seconds so the spinner never hangs forever
+    const authTimeout = setTimeout(() => {
+      window.location.href = "/login";
+    }, 12000);
+
     authApi.me()
       .then(res => {
+        clearTimeout(authTimeout);
         setUser(res.user);
         setLoading(false);
       })
       .catch(() => {
-        // Token missing or expired - redirect to login
+        clearTimeout(authTimeout);
         window.location.href = "/login";
       });
+
+    return () => clearTimeout(authTimeout);
   }, []);
 
   useEffect(() => {
@@ -59,18 +67,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   useEffect(() => {
     if (!user) return;
 
-    // Connect to WebSocket Gateway running on NestJS server (port 4000)
-    const socket = io("http://localhost:4000", {
+    // Derive WebSocket base URL from the same env var used for HTTP API
+    const wsBase = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api").replace(/\/api$/, "");
+    const socket = io(wsBase, {
       query: { userId: user.id },
-      transports: ["websocket"],
+      transports: ["websocket", "polling"],
+      reconnectionAttempts: 3,
+      timeout: 5000,
     });
 
     socket.on("connect", () => {
-      console.log("WebSocket client connected to Gateway");
+      console.log("WebSocket connected");
+    });
+
+    socket.on("connect_error", (err) => {
+      // Real-time notifications unavailable — HTTP endpoints still work fine
+      console.warn("WebSocket unavailable:", err.message);
     });
 
     socket.on("notification", (newNotif: any) => {
-      console.log("Real-time notification received:", newNotif);
       setNotifications(prev => [newNotif, ...prev]);
       setToast({
         id: newNotif.id,
@@ -81,7 +96,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     });
 
     socket.on("disconnect", () => {
-      console.log("WebSocket client disconnected");
+      console.log("WebSocket disconnected");
     });
 
     return () => {
