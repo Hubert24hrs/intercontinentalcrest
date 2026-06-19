@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Globe, Eye, EyeOff, Mail, Lock, User, Phone, ArrowRight, Shield, CheckCircle2 } from "lucide-react";
 import { authApi } from "@/lib/api";
 
-const steps = ["Personal Info", "Contact & Security", "Verify"];
+const steps = ["Personal Info", "Contact & Security"];
 
 function PasswordStrength({ password }: { password: string }) {
   const checks = [
@@ -65,11 +65,14 @@ export default function RegisterPage() {
     e.preventDefault();
     setErrorMsg("");
 
-    if (step < steps.length - 1) {
-      if (step === 1 && form.password !== form.confirmPassword) {
+    if (step === 1) {
+      if (form.password !== form.confirmPassword) {
         setErrorMsg("Passwords do not match.");
         return;
       }
+    }
+
+    if (step < steps.length - 1) {
       setStep(step + 1);
     } else {
       setLoading(true);
@@ -163,10 +166,10 @@ export default function RegisterPage() {
 
           <div className="mb-6">
             <h1 className="font-display font-bold text-brand-secondary text-2xl mb-1">
-              {step === 0 ? "Create your account" : step === 1 ? "Contact & Security" : "Verify your identity"}
+              {step === 0 ? "Create your account" : "Contact & Security"}
             </h1>
             <p className="text-gray-500 text-sm">
-              {step === 0 ? "Join millions of customers worldwide." : step === 1 ? "Secure your account with a strong password." : "Enter the codes sent to your email and phone."}
+              {step === 0 ? "Join millions of customers worldwide." : "Secure your account with a strong password."}
             </p>
           </div>
 
@@ -245,21 +248,6 @@ export default function RegisterPage() {
               </>
             )}
 
-            {step === 2 && (
-              <>
-                <div className="bg-blue-50 rounded-xl p-4 text-sm text-blue-700 mb-2">
-                  We&apos;ve sent verification codes to your email and phone. Enter them below to complete registration.
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1.5" htmlFor="reg-email-code">Email Verification Code</label>
-                  <input id="reg-email-code" type="text" inputMode="numeric" maxLength={6} className="form-input text-center text-xl tracking-[0.4em] font-mono" placeholder="000000" value={form.emailCode} onChange={(e) => setForm({ ...form, emailCode: e.target.value })} required />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1.5" htmlFor="reg-phone-code">SMS Verification Code</label>
-                  <input id="reg-phone-code" type="text" inputMode="numeric" maxLength={6} className="form-input text-center text-xl tracking-[0.4em] font-mono" placeholder="000000" value={form.phoneCode} onChange={(e) => setForm({ ...form, phoneCode: e.target.value })} required />
-                </div>
-              </>
-            )}
 
             <button type="submit" disabled={loading} className="btn-primary w-full justify-center mt-2">
               {loading ? (
