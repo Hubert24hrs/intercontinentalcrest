@@ -45,9 +45,11 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# database
-*.db
-*.db-journal
+# database — keep dev.db in git so Vercel cold-starts can copy it to /tmp
+# *.db
+# *.db-journal
+*.db-shm
+*.db-wal
 
 # backend
 backend/dist/

@@ -14,7 +14,8 @@
     "start:prod": "node dist/main",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "vercel-build": "prisma generate"
+    "prisma:seed": "ts-node -r tsconfig-paths/register prisma/seed.ts",
+    "vercel-build": "prisma generate && prisma migrate deploy"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",
@@ -38,6 +39,9 @@
     "reflect-metadata": "^0.1.13",
     "rxjs": "^7.8.1",
     "socket.io": "^4.8.3"
+  },
+  "prisma": {
+    "seed": "ts-node -r tsconfig-paths/register prisma/seed.ts"
   },
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",
