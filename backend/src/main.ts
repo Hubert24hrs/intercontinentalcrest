@@ -38,23 +38,30 @@ export async function bootstrapExpress(): Promise<any> {
   // ── Serverless DB setup: copy bundled SQLite database to /tmp so it is writable ──
   if (process.env.VERCEL) {
     const destPath = '/tmp/dev.db';
-    // Vercel deploys from the backend/ root, so prisma/dev.db is relative to cwd
-    const srcPath = path.resolve(process.cwd(), 'prisma', 'dev.db');
 
     if (!fs.existsSync(destPath)) {
-      console.log(`[DB] Cold start — copying ${srcPath} → ${destPath}`);
+      // Try multiple possible source paths — Vercel may resolve cwd differently depending on bundler
+      const candidatePaths = [
+        path.resolve(process.cwd(), 'prisma', 'dev.db'),
+        path.resolve(__dirname, '..', 'prisma', 'dev.db'),
+        path.resolve(__dirname, 'prisma', 'dev.db'),
+        '/var/task/prisma/dev.db',
+      ];
+      const srcPath = candidatePaths.find(p => { try { return fs.existsSync(p); } catch { return false; } });
+
+      console.log(`[DB] Cold start — cwd=${process.cwd()} __dirname=${__dirname}`);
+      console.log(`[DB] Resolved source: ${srcPath ?? 'NOT FOUND'}`);
+
       try {
-        fs.mkdirSync('/tmp', { recursive: true });
-        if (fs.existsSync(srcPath)) {
+        if (srcPath) {
           fs.copyFileSync(srcPath, destPath);
           fs.chmodSync(destPath, 0o666);
-          console.log('[DB] Database ready in /tmp');
+          console.log('[DB] Database copied to /tmp');
         } else {
-          console.warn('[DB] prisma/dev.db not found in deployment — creating empty database');
-          // Prisma will handle schema creation via migrate on first connection
+          console.warn('[DB] prisma/dev.db not found in any candidate path — Prisma will create a fresh database');
         }
       } catch (err: any) {
-        console.error('[DB] Failed to set up /tmp database:', err?.message);
+        console.error('[DB] Failed to copy database:', err?.message);
       }
     } else {
       console.log('[DB] Warm start — reusing /tmp/dev.db');
