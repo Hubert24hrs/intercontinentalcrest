@@ -1,15 +1,14 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import * as nodemailer from 'nodemailer';
 import * as fs from 'fs';
 import * as path from 'path';
 
 @Injectable()
 export class EmailService implements OnModuleInit {
-  private transporter: nodemailer.Transporter | null = null;
   private logFilePath: string;
 
   onModuleInit() {
-    this.logFilePath = path.join(process.cwd(), 'mails', 'sent_mails.log');
+    const basePath = process.env.VERCEL ? '/tmp' : process.cwd();
+    this.logFilePath = path.join(basePath, 'mails', 'sent_mails.log');
     
     // Ensure mails directory exists
     const mailsDir = path.dirname(this.logFilePath);
@@ -17,22 +16,12 @@ export class EmailService implements OnModuleInit {
       fs.mkdirSync(mailsDir, { recursive: true });
     }
 
-    const host = process.env.SMTP_HOST;
-    const port = process.env.SMTP_PORT;
-    const user = process.env.SMTP_USER;
-    const pass = process.env.SMTP_PASS;
-
-    if (host && port && user && pass) {
-      this.transporter = nodemailer.createTransport({
-        host,
-        port: parseInt(port),
-        secure: process.env.SMTP_SECURE === 'true',
-        auth: { user, pass },
-      });
-      console.log('EmailService: SMTP Transporter initialized successfully.');
+    const apiKey = process.env.RESEND_API_KEY;
+    if (apiKey) {
+      console.log('EmailService: Resend API initialized successfully.');
     } else {
       console.log(
-        `EmailService: SMTP config not fully specified. Falling back to local file logging: ${this.logFilePath}`,
+        `EmailService: Resend API key not specified. Falling back to local file logging: ${this.logFilePath}`,
       );
     }
   }
@@ -43,23 +32,38 @@ export class EmailService implements OnModuleInit {
     text: string;
     html?: string;
   }) {
+    const apiKey = process.env.RESEND_API_KEY;
     const from =
-      process.env.SMTP_FROM ||
-      '"Intercontinental Crest" <noreply@intercontinentalcrest.com>';
+      process.env.RESEND_FROM_EMAIL ||
+      '"Intercontinental Crest" <onboarding@resend.dev>';
 
-    if (this.transporter) {
+    if (apiKey) {
       try {
-        await this.transporter.sendMail({
-          from,
-          to: options.to,
-          subject: options.subject,
-          text: options.text,
-          html: options.html,
+        console.log(`EmailService: Sending email to ${options.to} via Resend...`);
+        const response = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from,
+            to: options.to,
+            subject: options.subject,
+            text: options.text,
+            html: options.html,
+          }),
         });
-        console.log(`Email sent successfully via SMTP to ${options.to}`);
-        return;
+
+        const resData = await response.json().catch(() => ({}));
+        if (response.ok) {
+          console.log(`Email sent successfully via Resend to ${options.to}. ID: ${resData.id}`);
+          return;
+        } else {
+          console.error('Resend API returned an error:', resData);
+        }
       } catch (err) {
-        console.error('SMTP email send failed. Logging email locally instead.', err);
+        console.error('Resend email send failed. Logging email locally instead.', err);
       }
     }
 

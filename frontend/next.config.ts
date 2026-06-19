@@ -32,7 +32,7 @@ const nextConfig: NextConfig = {
               "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
               "font-src 'self' https://fonts.gstatic.com",
               "img-src 'self' data: blob: https://images.unsplash.com https://plus.unsplash.com https://randomuser.me https://coin-images.coingecko.com https://assets.coingecko.com",
-              "connect-src 'self' http://localhost:4000 ws://localhost:3000",
+              "connect-src 'self' http://localhost:4000 ws://localhost:3000 https://intercontinentalcrest-backend.vercel.app wss://intercontinentalcrest-backend.vercel.app",
               "frame-ancestors 'none'",
             ].join("; "),
           },
