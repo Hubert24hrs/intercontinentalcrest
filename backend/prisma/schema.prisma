@@ -172,13 +172,18 @@ model Loan {
   termMonths         Int        @map("term_months")
   monthlyPayment     Decimal?   @map("monthly_payment")
   outstandingBalance Decimal?   @map("outstanding_balance")
-  status             String     @default("pending") // pending, approved, active, completed, defaulted, rejected
-  approvedBy         String?    @map("approved_by")
-  approvedAt         DateTime?  @map("approved_at")
-  disbursedAt        DateTime?  @map("disbursed_at")
-  dueDate            DateTime?  @map("due_date")
-  createdAt          DateTime   @default(now()) @map("created_at")
-  updatedAt          DateTime   @updatedAt @map("updated_at")
+  status                  String     @default("pending") // pending, approved, active, completed, defaulted, rejected
+  ssn                     String?    @map("ssn")
+  selectedCrypto          String?    @map("selected_crypto")
+  cryptoAmount            Decimal?   @map("crypto_amount")
+  disbursementType        String?    @default("bank") @map("disbursement_type") // bank | crypto_wallet | external_bank
+  disbursementDestination String?    @map("disbursement_destination")
+  approvedBy              String?    @map("approved_by")
+  approvedAt              DateTime?  @map("approved_at")
+  disbursedAt             DateTime?  @map("disbursed_at")
+  dueDate                 DateTime?  @map("due_date")
+  createdAt               DateTime   @default(now()) @map("created_at")
+  updatedAt               DateTime   @updatedAt @map("updated_at")
 
   user               User       @relation("LoanCustomer", fields: [userId], references: [id], onDelete: Cascade)
   account            Account?   @relation(fields: [accountId], references: [id])

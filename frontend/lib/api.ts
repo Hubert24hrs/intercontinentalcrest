@@ -236,6 +236,11 @@ export const loansApi = {
     interestRate: number;
     termMonths: number;
     accountId?: string;
+    ssn?: string;
+    selectedCrypto?: string;
+    cryptoAmount?: number;
+    disbursementType?: string;
+    disbursementDestination?: string;
   }) => {
     return request('/loans/apply', {
       method: 'POST',
