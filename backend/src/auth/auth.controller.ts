@@ -81,6 +81,21 @@ export class AuthController {
     return this.authService.disable2Fa(req.user.id, verifyDto.code);
   }
 
+  @Post('refresh')
+  @HttpCode(HttpStatus.OK)
+  async refresh(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const refreshToken = (req as any).cookies?.['refreshToken'];
+    if (!refreshToken) {
+      return res.status(401).json({ message: 'No refresh token' });
+    }
+    const result = await this.authService.refreshAccessToken(refreshToken) as any;
+    this.setAuthCookies(res, result.accessToken, result.refreshToken);
+    return { accessToken: result.accessToken };
+  }
+
   @Post('logout')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)

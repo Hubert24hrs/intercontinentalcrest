@@ -1,25 +1,82 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
-async function request(path: string, options: RequestInit = {}) {
-  const url = `${API_BASE}${path}`;
-  const headers = new Headers(options.headers || {});
+// Silent token refresh state — shared across all concurrent requests
+let isRefreshing = false;
+let refreshQueue: Array<(token: string | null) => void> = [];
 
+function drainRefreshQueue(token: string | null) {
+  refreshQueue.forEach(resolve => resolve(token));
+  refreshQueue = [];
+}
+
+async function doTokenRefresh(): Promise<string | null> {
+  try {
+    const res = await fetch(`${API_BASE}/auth/refresh`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => null);
+    const newToken = data?.accessToken ?? null;
+    if (newToken && typeof window !== 'undefined') {
+      localStorage.setItem('accessToken', newToken);
+    }
+    return newToken;
+  } catch {
+    return null;
+  }
+}
+
+function buildHeaders(options: RequestInit, token?: string | null): Headers {
+  const headers = new Headers(options.headers || {});
   if (options.body && !(options.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
   }
+  const t = token ?? (typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null);
+  if (t) headers.set('Authorization', `Bearer ${t}`);
+  return headers;
+}
 
-  if (typeof window !== 'undefined') {
-    const token = localStorage.getItem('accessToken');
-    if (token) {
-      headers.set('Authorization', `Bearer ${token}`);
-    }
-  }
+async function request(path: string, options: RequestInit = {}) {
+  const url = `${API_BASE}${path}`;
 
-  const response = await fetch(url, {
+  let response = await fetch(url, {
     ...options,
-    headers,
-    credentials: 'include', // Send/receive HTTP-only cookies
+    headers: buildHeaders(options),
+    credentials: 'include',
   });
+
+  // On 401, silently refresh the access token and retry once
+  if (response.status === 401 && !path.startsWith('/auth/')) {
+    let newToken: string | null;
+
+    if (isRefreshing) {
+      // Another request is already refreshing — wait for it
+      newToken = await new Promise<string | null>(resolve => {
+        refreshQueue.push(resolve);
+      });
+    } else {
+      isRefreshing = true;
+      newToken = await doTokenRefresh();
+      isRefreshing = false;
+      drainRefreshQueue(newToken);
+    }
+
+    if (!newToken) {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('accessToken');
+        window.location.href = '/login';
+      }
+      throw new Error('Session expired. Please log in again.');
+    }
+
+    // Retry original request with the fresh token
+    response = await fetch(url, {
+      ...options,
+      headers: buildHeaders(options, newToken),
+      credentials: 'include',
+    });
+  }
 
   const resData = await response.json().catch(() => ({}));
 

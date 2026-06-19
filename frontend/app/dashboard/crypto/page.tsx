@@ -38,35 +38,37 @@ export default function CryptoMarketplacePage() {
   const [tradeSuccess, setTradeSuccess] = useState<string | null>(null);
   const [tradeError, setTradeError] = useState<string | null>(null);
 
-  // Load initial data
+  // Load initial data — markets load first so the page is never blank
   useEffect(() => {
     async function initData() {
       try {
-        const [marketList, portfolioData, userAccounts] = await Promise.all([
-          cryptoApi.getMarkets(),
-          cryptoApi.getPortfolio(),
-          accountsApi.getAccounts()
-        ]);
-
+        const marketList = await cryptoApi.getMarkets();
         setMarkets(marketList);
-        setPortfolio(portfolioData);
-        setAccounts(userAccounts);
 
-        // Pre-select first account as default funding source
-        if (userAccounts && userAccounts.length > 0) {
-          setSelectedAccountId(userAccounts[0].id);
-        }
-
-        // Set initial selected trade coin to bitcoin or first coin
         if (marketList && marketList.length > 0) {
           const defaultCoin = marketList.find((c: any) => c.id === "bitcoin") || marketList[0];
           setSelectedTradeCoin(defaultCoin);
           setSelectedCoinId(defaultCoin.id);
         }
       } catch (err) {
-        console.error("Failed to load initial data", err);
+        console.error("Failed to load market data", err);
       } finally {
         setLoading(false);
+      }
+
+      // Load user portfolio and accounts separately — failure here won't blank markets
+      try {
+        const [portfolioData, userAccounts] = await Promise.all([
+          cryptoApi.getPortfolio(),
+          accountsApi.getAccounts(),
+        ]);
+        setPortfolio(portfolioData);
+        setAccounts(userAccounts);
+        if (userAccounts && userAccounts.length > 0) {
+          setSelectedAccountId(userAccounts[0].id);
+        }
+      } catch (err) {
+        console.error("Failed to load portfolio/accounts", err);
       }
     }
     initData();
@@ -131,21 +133,25 @@ export default function CryptoMarketplacePage() {
   const handleManualRefresh = async () => {
     setRefreshing(true);
     try {
-      const [marketList, portfolioData, userAccounts] = await Promise.all([
-        cryptoApi.getMarkets(),
-        cryptoApi.getPortfolio(),
-        accountsApi.getAccounts()
-      ]);
+      const marketList = await cryptoApi.getMarkets();
       setMarkets(marketList);
-      setPortfolio(portfolioData);
-      setAccounts(userAccounts);
       setTradeSuccess("Market prices updated!");
       setTimeout(() => setTradeSuccess(null), 3000);
-    } catch (err) {
-      setTradeError("Failed to refresh data");
+    } catch {
+      setTradeError("Failed to refresh market data");
       setTimeout(() => setTradeError(null), 3000);
     } finally {
       setRefreshing(false);
+    }
+    try {
+      const [portfolioData, userAccounts] = await Promise.all([
+        cryptoApi.getPortfolio(),
+        accountsApi.getAccounts(),
+      ]);
+      setPortfolio(portfolioData);
+      setAccounts(userAccounts);
+    } catch {
+      // Portfolio refresh failure is non-fatal; markets are already updated
     }
   };
 

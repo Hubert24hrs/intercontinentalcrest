@@ -80,7 +80,7 @@ export class AuthService {
 
   async generateTokens(user: any) {
     const payload = { sub: user.id, email: user.email, role: user.role };
-    
+
     const accessToken = this.jwtService.sign(payload, {
       expiresIn: '15m',
     });
@@ -103,6 +103,17 @@ export class AuthService {
         twoFactorEnabled: user.twoFactorEnabled,
       },
     };
+  }
+
+  async refreshAccessToken(refreshToken: string) {
+    try {
+      const payload = this.jwtService.verify(refreshToken);
+      const user = await this.usersService.findOneById(payload.sub);
+      if (!user) throw new UnauthorizedException();
+      return this.generateTokens(user);
+    } catch {
+      throw new UnauthorizedException('Refresh token is invalid or expired');
+    }
   }
 
   async generate2FaSecret(userId: string) {
