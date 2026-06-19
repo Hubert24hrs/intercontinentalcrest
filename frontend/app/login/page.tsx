@@ -1,17 +1,27 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Globe, Eye, EyeOff, Mail, Lock, ArrowRight, Shield } from "lucide-react";
 import { authApi } from "@/lib/api";
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+
 export default function LoginPage() {
+  const router = useRouter();
   const [showPass, setShowPass] = useState(false);
   const [step, setStep] = useState<"login" | "2fa">("login");
   const [form, setForm] = useState({ email: "", password: "", remember: false, code: "" });
   const [loading, setLoading] = useState(false);
   const [tempToken, setTempToken] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+
+  // Warm up the backend while the user is filling in the form so the
+  // cold-start penalty is paid before — not after — they click Sign In.
+  useEffect(() => {
+    fetch(`${API_BASE}/auth/me`, { credentials: 'include' }).catch(() => {});
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,8 +37,11 @@ export default function LoginPage() {
         setTempToken(result.tempToken);
         setStep("2fa");
       } else {
-        // Successful login, redirect to dashboard
-        window.location.href = "/dashboard";
+        // Cache user so the dashboard renders instantly without an extra /me round-trip
+        if (result.user) {
+          localStorage.setItem('cachedUser', JSON.stringify(result.user));
+        }
+        router.push("/dashboard");
       }
     } catch (err: any) {
       setErrorMsg(err.message || "Invalid email or password. Please try again.");
@@ -42,8 +55,9 @@ export default function LoginPage() {
     setLoading(true);
     setErrorMsg("");
     try {
-      await authApi.authenticate2Fa(tempToken, form.code);
-      window.location.href = "/dashboard";
+      const r = await authApi.authenticate2Fa(tempToken, form.code);
+      if (r?.user) localStorage.setItem('cachedUser', JSON.stringify(r.user));
+      router.push("/dashboard");
     } catch (err: any) {
       setErrorMsg(err.message || "Invalid 2FA verification code.");
     } finally {

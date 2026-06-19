@@ -34,23 +34,41 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pathname = usePathname();
 
   useEffect(() => {
-    // Bail out after 12 seconds so the spinner never hangs forever
-    const authTimeout = setTimeout(() => {
-      window.location.href = "/login";
-    }, 12000);
+    // Instant render: show dashboard immediately from cached user so
+    // the loading spinner never blocks returning users.
+    let loadedFromCache = false;
+    const cachedRaw = localStorage.getItem('cachedUser');
+    if (cachedRaw) {
+      try {
+        setUser(JSON.parse(cachedRaw));
+        setLoading(false);
+        loadedFromCache = true;
+      } catch {
+        localStorage.removeItem('cachedUser');
+      }
+    }
+
+    // Validate the session in the background. Only show the spinner timeout
+    // for brand-new visits where we have nothing cached to display yet.
+    const authTimeout = loadedFromCache
+      ? null
+      : setTimeout(() => { window.location.href = "/login"; }, 8000);
 
     authApi.me()
       .then(res => {
-        clearTimeout(authTimeout);
+        if (authTimeout) clearTimeout(authTimeout);
         setUser(res.user);
+        localStorage.setItem('cachedUser', JSON.stringify(res.user));
         setLoading(false);
       })
       .catch(() => {
-        clearTimeout(authTimeout);
+        if (authTimeout) clearTimeout(authTimeout);
+        localStorage.removeItem('cachedUser');
+        localStorage.removeItem('accessToken');
         window.location.href = "/login";
       });
 
-    return () => clearTimeout(authTimeout);
+    return () => { if (authTimeout) clearTimeout(authTimeout); };
   }, []);
 
   useEffect(() => {
@@ -119,6 +137,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     } catch (e) {
       console.error("Logout failed", e);
     }
+    localStorage.removeItem('cachedUser');
+    localStorage.removeItem('accessToken');
     window.location.href = "/login";
   };
 
