@@ -96,15 +96,6 @@ export default function DashboardPage() {
     const cryptoTotal = cryptoHoldingsList.reduce((sum: number, h: any) => sum + h.currentValue, 0);
     const totalAssets = bankingTotal + investmentsTotal + cryptoTotal;
 
-    // Simulated premium indicators calculated deterministically
-    const seedValue = totalAssets > 0 ? totalAssets : 1000;
-    const dailyChange = seedValue * 0.0125;
-    const dailyPercent = 1.25;
-    const monthlyChange = seedValue * 0.064;
-    const monthlyPercent = 6.40;
-    const yearlyChange = seedValue * 0.191;
-    const yearlyPercent = 19.10;
-
     return {
       checking,
       savings,
@@ -115,12 +106,6 @@ export default function DashboardPage() {
       cryptoTotal,
       cryptoHoldingsList,
       totalAssets,
-      dailyChange,
-      dailyPercent,
-      monthlyChange,
-      monthlyPercent,
-      yearlyChange,
-      yearlyPercent
     };
   }, [accounts, myInvestments, cryptoPortfolio, cryptoMarkets]);
 
@@ -201,13 +186,11 @@ export default function DashboardPage() {
       tempBanking = tempBanking - income + expense;
     }
 
-    // Overlay active investments and crypto (historical growth simulation)
-    list.forEach((item, idx) => {
-      // Linear growth factor for illustration
-      const growthFactor = 0.8 + (0.04 * idx); // e.g. 80% to 100%
-      item.investments = parseFloat((assetData.investmentsTotal * growthFactor).toFixed(2));
-      item.crypto = parseFloat((assetData.cryptoTotal * (0.75 + 0.05 * idx)).toFixed(2));
-      item.netWorth = parseFloat((item.banking + item.investments + item.crypto).toFixed(2));
+    // Use current totals for investments and crypto (no fake historical extrapolation)
+    list.forEach((item) => {
+      item.investments = parseFloat(assetData.investmentsTotal.toFixed(2));
+      item.crypto      = parseFloat(assetData.cryptoTotal.toFixed(2));
+      item.netWorth    = parseFloat((item.banking + item.investments + item.crypto).toFixed(2));
     });
 
     return list;
@@ -262,33 +245,27 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Premium Net Worth Indicators */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-4 pt-4 border-t border-white/10 text-xs">
+          {/* Real Asset Breakdown Summary */}
+          <div className="grid grid-cols-3 gap-4 pt-4 border-t border-white/10 text-xs">
             <div>
-              <span className="text-white/40 block">Daily Change</span>
-              <div className="flex items-center gap-1 mt-0.5 font-semibold text-emerald-400">
-                <TrendingUp className="w-3.5 h-3.5" />
-                <span>
-                  {hideBalance ? "•••" : `+$${assetData.dailyChange.toLocaleString("en-US", { maximumFractionDigits: 2 })}`} (+{assetData.dailyPercent}%)
-                </span>
+              <span className="text-white/40 block">Banking</span>
+              <div className="flex items-center gap-1 mt-0.5 font-semibold text-white">
+                <CreditCard className="w-3.5 h-3.5 text-brand-primary" />
+                <span>{hideBalance ? "•••" : `$${assetData.bankingTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</span>
               </div>
             </div>
             <div>
-              <span className="text-white/40 block">Monthly Change</span>
-              <div className="flex items-center gap-1 mt-0.5 font-semibold text-emerald-400">
-                <TrendingUp className="w-3.5 h-3.5" />
-                <span>
-                  {hideBalance ? "•••" : `+$${assetData.monthlyChange.toLocaleString("en-US", { maximumFractionDigits: 2 })}`} (+{assetData.monthlyPercent}%)
-                </span>
+              <span className="text-white/40 block">Investments</span>
+              <div className="flex items-center gap-1 mt-0.5 font-semibold text-white">
+                <Briefcase className="w-3.5 h-3.5 text-brand-primary" />
+                <span>{hideBalance ? "•••" : `$${assetData.investmentsTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</span>
               </div>
             </div>
-            <div className="col-span-2 sm:col-span-1">
-              <span className="text-white/40 block">Yearly Growth</span>
-              <div className="flex items-center gap-1 mt-0.5 font-semibold text-emerald-400">
-                <TrendingUp className="w-3.5 h-3.5" />
-                <span>
-                  {hideBalance ? "•••" : `+$${assetData.yearlyChange.toLocaleString("en-US", { maximumFractionDigits: 2 })}`} (+{assetData.yearlyPercent}%)
-                </span>
+            <div>
+              <span className="text-white/40 block">Crypto</span>
+              <div className="flex items-center gap-1 mt-0.5 font-semibold text-white">
+                <Coins className="w-3.5 h-3.5 text-brand-primary" />
+                <span>{hideBalance ? "•••" : `$${assetData.cryptoTotal.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</span>
               </div>
             </div>
           </div>

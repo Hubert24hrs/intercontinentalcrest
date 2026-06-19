@@ -3,9 +3,9 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   Zap, Wifi, Droplets, Flame, Phone, CheckCircle2, ArrowRight,
-  Loader2, Coins, Landmark, ChevronRight
+  Loader2, Coins, Landmark, AlertTriangle
 } from "lucide-react";
-import { cryptoApi, accountsApi } from "@/lib/api";
+import { cryptoApi, accountsApi, transactionsApi } from "@/lib/api";
 
 const billers = [
   { id: "electric", icon: Zap,      label: "Electricity",    color: "bg-yellow-100 text-yellow-600",  providers: ["ConEd", "Duke Energy", "Pacific Gas"] },
@@ -21,6 +21,7 @@ export default function BillsPage() {
   const [paymentMethod, setPaymentMethod] = useState<"bank" | "crypto">("bank");
   const [paid, setPaid]                   = useState(false);
   const [loading, setLoading]             = useState(false);
+  const [payError, setPayError]           = useState("");
 
   // Bank account data
   const [accounts, setAccounts]           = useState<any[]>([]);
@@ -87,12 +88,40 @@ export default function BillsPage() {
   const billAmount  = parseFloat(form.amount) || 0;
   const hasSufficientBank = billAmount > 0 && billAmount <= bankBalance;
 
-  const handlePay = (e: React.FormEvent) => {
+  const handlePay = async (e: React.FormEvent) => {
     e.preventDefault();
     if (paymentMethod === "crypto" && !hasSufficientCrypto) return;
     if (paymentMethod === "bank"   && !hasSufficientBank)   return;
+
     setLoading(true);
-    setTimeout(() => { setLoading(false); setPaid(true); }, 1500);
+    setPayError("");
+
+    try {
+      if (paymentMethod === "bank") {
+        // Deduct from the selected bank account — external payee, no internal receiver
+        await transactionsApi.initiateTransfer({
+          senderAccountId: selectedAccountId,
+          receiverAccountNumber: `EXT-BILL-${selectedBiller?.id?.toUpperCase()}-${Date.now()}`,
+          amount: parseFloat(form.amount),
+          description: `${selectedBiller?.label} Bill — ${form.provider} (Ref: ${form.account})`,
+          type: "bill_payment",
+        });
+      } else {
+        // Sell the exact crypto amount required; proceeds go to the selected bank account
+        await cryptoApi.sellCrypto({
+          coinId: activeHolding.coinId,
+          coinSymbol: activeHolding.coinSymbol,
+          coinName: activeHolding.coinName,
+          quantity: cryptoRequired,
+          toAccountId: selectedAccountId,
+        });
+      }
+      setPaid(true);
+    } catch (err: any) {
+      setPayError(err.message || "Payment failed. Please check your balance and try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const resetForm = () => {
@@ -333,6 +362,13 @@ export default function BillsPage() {
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+
+            {payError && (
+              <div className="flex items-start gap-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl p-3.5">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{payError}</span>
               </div>
             )}
 

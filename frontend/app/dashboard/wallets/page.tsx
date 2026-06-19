@@ -106,7 +106,7 @@ export default function WalletsPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleSimulateDeposit = async (e: React.FormEvent) => {
+  const handleDeposit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedWallet) return;
 
@@ -125,17 +125,17 @@ export default function WalletsPage() {
         coinId: selectedWallet.coinId,
         amount: amt
       });
-      setDepositSuccess(`Successfully simulated deposit of ${amt} ${selectedWallet.coinSymbol}!`);
+      setDepositSuccess(`${amt} ${selectedWallet.coinSymbol} deposited to your custody wallet.`);
       setDepositAmount("");
       await loadData();
     } catch (err: any) {
-      setDepositError(err.message || "Simulation failed");
+      setDepositError(err.message || "Deposit failed. Please try again.");
     } finally {
       setIsDepositing(false);
     }
   };
 
-  const handleSimulateWithdrawal = async (e: React.FormEvent) => {
+  const handleWithdrawal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedWallet) return;
 
@@ -145,7 +145,7 @@ export default function WalletsPage() {
       return;
     }
     if (amt > parseFloat(selectedWallet.balance)) {
-      setWithdrawError("Insufficient balance in your custody wallet");
+      setWithdrawError("Insufficient balance — you cannot withdraw more than your wallet holds");
       return;
     }
     if (!destinationAddress || destinationAddress.trim() === "") {
@@ -163,12 +163,12 @@ export default function WalletsPage() {
         amount: amt,
         destinationAddress: destinationAddress.trim()
       });
-      setWithdrawSuccess(`Successfully withdrew ${amt} ${selectedWallet.coinSymbol}!`);
+      setWithdrawSuccess(`${amt} ${selectedWallet.coinSymbol} withdrawn to ${destinationAddress.trim().slice(0, 12)}...`);
       setWithdrawAmount("");
       setDestinationAddress("");
       await loadData();
     } catch (err: any) {
-      setWithdrawError(err.message || "Simulation failed");
+      setWithdrawError(err.message || "Withdrawal failed. Please check your balance and try again.");
     } finally {
       setIsWithdrawing(false);
     }
@@ -379,10 +379,10 @@ export default function WalletsPage() {
                           </p>
                         </div>
 
-                        <form onSubmit={handleSimulateDeposit} className="space-y-4">
+                        <form onSubmit={handleDeposit} className="space-y-4">
                           <h4 className="font-bold text-brand-secondary text-xs flex items-center gap-1">
                             <Coins className="w-3.5 h-3.5 text-brand-primary" />
-                            Simulate Deposit / Credit Wallet
+                            Deposit / Credit Wallet
                           </h4>
 
                           {depositSuccess && (
@@ -400,7 +400,7 @@ export default function WalletsPage() {
                           )}
 
                           <div className="space-y-1.5">
-                            <label className="text-gray-600 font-semibold block">Simulated Deposit Amount ({selectedWallet.coinSymbol})</label>
+                            <label className="text-gray-600 font-semibold block">Deposit Amount ({selectedWallet.coinSymbol})</label>
                             <div className="relative">
                               <input
                                 type="number"
@@ -428,7 +428,7 @@ export default function WalletsPage() {
                                 Crediting node...
                               </>
                             ) : (
-                              "Execute Simulation Credit"
+                              "Confirm Deposit"
                             )}
                           </button>
                         </form>
@@ -437,10 +437,10 @@ export default function WalletsPage() {
                   )}
 
                   {activeSubTab === "withdraw" && (
-                    <form onSubmit={handleSimulateWithdrawal} className="space-y-4 max-w-xl">
+                    <form onSubmit={handleWithdrawal} className="space-y-4 max-w-xl">
                       <h4 className="font-bold text-brand-secondary text-xs flex items-center gap-1">
                         <ArrowUpRight className="w-3.5 h-3.5 text-brand-primary" />
-                        Simulate Withdrawal / Transfer Out
+                        Withdraw / Transfer Out
                       </h4>
 
                       {withdrawSuccess && (
@@ -508,7 +508,7 @@ export default function WalletsPage() {
                             Broadcasting to blockchain...
                           </>
                         ) : (
-                          "Execute Simulation Withdrawal"
+                              "Confirm Withdrawal"
                         )}
                       </button>
                     </form>
