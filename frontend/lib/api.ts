@@ -40,11 +40,26 @@ function buildHeaders(options: RequestInit, token?: string | null): Headers {
 async function request(path: string, options: RequestInit = {}) {
   const url = `${API_BASE}${path}`;
 
-  let response = await fetch(url, {
-    ...options,
-    headers: buildHeaders(options),
-    credentials: 'include',
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: buildHeaders(options),
+      credentials: 'include',
+    });
+  } catch (netErr: any) {
+    // Network failure (connection refused, offline, CORS block, browser-extension interference)
+    const msg: string = netErr?.message || '';
+    if (msg === 'Failed to fetch' || msg.startsWith('Cannot read properties')) {
+      throw new Error('Unable to reach the server. Please check your connection and try again.');
+    }
+    throw new Error(msg || 'Network error. Please try again.');
+  }
+
+  // Guard against browser-extension interference returning a non-Response
+  if (!response || typeof response.status !== 'number') {
+    throw new Error('Unexpected network response. Please try again.');
+  }
 
   // On 401, silently refresh the access token and retry once
   if (response.status === 401 && !path.startsWith('/auth/')) {
