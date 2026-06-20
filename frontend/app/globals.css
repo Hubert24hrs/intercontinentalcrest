@@ -41,6 +41,7 @@
   --animate-fade-in-right: fade-in-right 0.6s ease-out forwards;
   --animate-shimmer: shimmer 2s linear infinite;
   --animate-float: float 3s ease-in-out infinite;
+  --animate-ticker-scroll: ticker-scroll 60s linear infinite;
 
   --shadow-card: 0 4px 24px rgba(0, 183, 241, 0.08);
   --shadow-card-hover: 0 8px 40px rgba(0, 183, 241, 0.18);
@@ -66,6 +67,10 @@
   @keyframes float {
     0%, 100% { transform: translateY(0px); }
     50% { transform: translateY(-10px); }
+  }
+  @keyframes ticker-scroll {
+    0%   { transform: translateX(-50%); }
+    100% { transform: translateX(0%); }
   }
 }
 
