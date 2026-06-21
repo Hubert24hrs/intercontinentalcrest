@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import LoansSection from "@/components/sections/LoansSection";
-import { Clock, FileText, CheckCircle2 } from "lucide-react";
+import { Clock, FileText, CheckCircle2, Calculator } from "lucide-react";
 import LoanCalculator from "./LoanCalculator";
 
 export const metadata: Metadata = {

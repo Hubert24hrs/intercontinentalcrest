@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
 
@@ -82,11 +81,6 @@ export default function LiveCryptoPrices() {
           </div>
         );
       })}
-      <div className="mt-6 text-center">
-        <Link href="/register" className="text-brand-primary text-xs font-semibold hover:underline flex items-center justify-center gap-1">
-          View all 20+ coins <ArrowRight className="w-3.5 h-3.5" />
-        </Link>
-      </div>
     </div>
   );
 }
