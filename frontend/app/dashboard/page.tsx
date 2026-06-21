@@ -287,7 +287,10 @@ export default function DashboardPage() {
                 ) : (
                   <span className="text-xs leading-none">{GROUP_ICON[item.group] || "•"}</span>
                 )}
-                <span className="text-white/60 text-[11px] font-bold tracking-wide">{item.symbol}</span>
+                <div className="flex flex-col leading-none">
+                  <span className="text-white text-[11px] font-bold tracking-wide truncate max-w-[100px]">{item.name || item.symbol}</span>
+                  <span className="text-white/40 text-[9px] font-mono uppercase">{item.symbol}</span>
+                </div>
                 <span className="text-white text-[11px] font-mono font-semibold">${fmtPrice(item.price)}</span>
                 <span className={`text-[11px] font-bold flex items-center gap-0.5 ${up ? "text-emerald-400" : "text-red-400"}`}>
                   {up ? "▲" : "▼"}{Math.abs(item.pct).toFixed(2)}%

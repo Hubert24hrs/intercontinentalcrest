@@ -112,7 +112,7 @@ export default function TransactionsPage() {
         if (
           !tx.description.toLowerCase().includes(q) &&
           !tx.reference.toLowerCase().includes(q) &&
-          !(tx.coinSymbol?.toLowerCase().includes(q))
+          !('coinSymbol' in tx && (tx as any).coinSymbol?.toLowerCase().includes(q))
         ) return false;
       }
       return true;
