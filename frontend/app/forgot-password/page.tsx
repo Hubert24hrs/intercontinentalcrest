@@ -2,17 +2,27 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Globe, Mail, ArrowRight, CheckCircle2 } from "lucide-react";
+import { Globe, Mail, ArrowRight, CheckCircle2, Loader2, AlertCircle } from "lucide-react";
+import { authApi } from "@/lib/api";
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
-    setTimeout(() => { setLoading(false); setSent(true); }, 1200);
+    setError(null);
+    try {
+      await authApi.forgotPassword(email);
+      setSent(true);
+    } catch (err: any) {
+      setError(err.message || "Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -35,18 +45,38 @@ export default function ForgotPasswordPage() {
                 <Mail className="w-7 h-7 text-brand-primary" />
               </div>
               <h1 className="font-display font-bold text-brand-secondary text-2xl mb-2">Forgot Password?</h1>
-              <p className="text-gray-500 text-sm">Enter your email and we&apos;ll send a reset link.</p>
+              <p className="text-gray-500 text-sm">Enter your registered email and we&apos;ll send a secure reset link.</p>
             </div>
+
+            {error && (
+              <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-gray-700 mb-1.5" htmlFor="fp-email">Email Address</label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input id="fp-email" type="email" className="form-input pl-10" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" />
+                  <input
+                    id="fp-email"
+                    type="email"
+                    className="form-input pl-10"
+                    placeholder="you@example.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                    autoComplete="email"
+                  />
                 </div>
               </div>
               <button type="submit" disabled={loading} className="btn-primary w-full justify-center">
-                {loading ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <><span>Send Reset Link</span><ArrowRight className="w-4 h-4" /></>}
+                {loading
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /> Sending...</>
+                  : <><span>Send Reset Link</span><ArrowRight className="w-4 h-4" /></>
+                }
               </button>
             </form>
             <p className="text-center text-xs text-gray-500 mt-6">
@@ -60,8 +90,13 @@ export default function ForgotPasswordPage() {
               <CheckCircle2 className="w-8 h-8 text-green-600" />
             </div>
             <h2 className="font-display font-bold text-brand-secondary text-xl">Check Your Email</h2>
-            <p className="text-gray-500 text-sm">We sent a password reset link to <strong className="text-brand-secondary">{email}</strong>. Check your inbox and follow the link to reset your password.</p>
-            <p className="text-xs text-gray-400">Didn&apos;t receive it? Check spam or <button onClick={() => setSent(false)} className="text-brand-primary hover:underline">try again</button>.</p>
+            <p className="text-gray-500 text-sm">
+              If <strong className="text-brand-secondary">{email}</strong> is registered with us, you&apos;ll receive a password reset link within a few minutes.
+            </p>
+            <p className="text-xs text-gray-400">
+              Didn&apos;t receive it? Check spam or{" "}
+              <button onClick={() => { setSent(false); setError(null); }} className="text-brand-primary hover:underline">try again</button>.
+            </p>
             <Link href="/login" className="btn-primary inline-flex">Back to Login</Link>
           </div>
         )}

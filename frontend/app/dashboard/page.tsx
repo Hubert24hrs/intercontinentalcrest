@@ -11,28 +11,8 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, PieChart, Pie, Cell, BarChart, Bar,
 } from "recharts";
-import { authApi, accountsApi, transactionsApi, investmentsApi, cryptoApi } from "@/lib/api";
+import { authApi, accountsApi, transactionsApi, investmentsApi, cryptoApi, marketApi } from "@/lib/api";
 import { motion, AnimatePresence } from "framer-motion";
-
-// ── Static indicative prices for stocks / indices / commodities ───────────────
-const EXTRA_TICKERS = [
-  { symbol: "SPX",   name: "S&P 500",     price: 5847.32,  pct: 0.82,  group: "index"     },
-  { symbol: "NDX",   name: "NASDAQ 100",  price: 20521.45, pct: 1.23,  group: "index"     },
-  { symbol: "DJI",   name: "Dow Jones",   price: 42156.78, pct: 0.34,  group: "index"     },
-  { symbol: "AAPL",  name: "Apple",       price: 207.83,   pct: 0.42,  group: "stock"     },
-  { symbol: "TSLA",  name: "Tesla",       price: 248.50,   pct: -1.12, group: "stock"     },
-  { symbol: "NVDA",  name: "NVIDIA",      price: 891.20,   pct: 2.31,  group: "stock"     },
-  { symbol: "AMZN",  name: "Amazon",      price: 187.45,   pct: 0.67,  group: "stock"     },
-  { symbol: "MSFT",  name: "Microsoft",   price: 421.67,   pct: 0.28,  group: "stock"     },
-  { symbol: "META",  name: "Meta",        price: 512.34,   pct: 1.02,  group: "stock"     },
-  { symbol: "GOOGL", name: "Alphabet",    price: 165.23,   pct: -0.45, group: "stock"     },
-  { symbol: "XAU",   name: "Gold",        price: 2387.45,  pct: 0.21,  group: "commodity" },
-  { symbol: "XAG",   name: "Silver",      price: 30.48,    pct: 0.54,  group: "commodity" },
-  { symbol: "WTI",   name: "Crude Oil",   price: 78.82,    pct: -0.31, group: "commodity" },
-  { symbol: "XPT",   name: "Platinum",    price: 1012.50,  pct: 0.12,  group: "commodity" },
-  { symbol: "XPD",   name: "Palladium",   price: 945.80,   pct: -0.67, group: "commodity" },
-  { symbol: "NGAS",  name: "Nat. Gas",    price: 2.45,     pct: -0.82, group: "commodity" },
-];
 
 const GROUP_ICON: Record<string, string> = {
   index: "📊",
@@ -94,6 +74,7 @@ export default function DashboardPage() {
   const [myInvestments, setMyInvestments] = useState<any[]>([]);
   const [cryptoPortfolio, setCryptoPortfolio] = useState<any>(null);
   const [cryptoMarkets, setCryptoMarkets] = useState<any[]>([]);
+  const [marketQuotes, setMarketQuotes] = useState<any[]>([]);
 
   useEffect(() => {
     async function loadDashboard() {
@@ -121,6 +102,11 @@ export default function DashboardPage() {
           const markets = await cryptoApi.getMarkets();
           setCryptoMarkets(markets || []);
         } catch { /* api offline */ }
+
+        try {
+          const quotes = await marketApi.getQuotes();
+          setMarketQuotes(quotes || []);
+        } catch { /* market quotes unavailable */ }
       } catch (err) {
         console.error("Dashboard load error:", err);
       } finally {
@@ -211,7 +197,7 @@ export default function DashboardPage() {
     return list;
   }, [transactions, assetData.bankingTotal, assetData.investmentsTotal, assetData.cryptoTotal]);
 
-  // ── Ticker: live crypto + static stocks/commodities ────────────────────────
+  // ── Ticker: live crypto + real market quotes (stocks/indices/commodities) ─────
   const tickerItems = useMemo(() => {
     const live = cryptoMarkets.slice(0, 12).map((c) => ({
       symbol: c.symbol.toUpperCase(),
@@ -221,8 +207,16 @@ export default function DashboardPage() {
       group:  "crypto",
       image:  c.image,
     }));
-    return [...live, ...EXTRA_TICKERS.map((t) => ({ ...t, image: undefined }))];
-  }, [cryptoMarkets]);
+    const quotes = marketQuotes.map((q) => ({
+      symbol: q.symbol,
+      name:   q.name,
+      price:  q.price,
+      pct:    q.pct ?? 0,
+      group:  q.group,
+      image:  undefined,
+    }));
+    return [...live, ...quotes];
+  }, [cryptoMarkets, marketQuotes]);
 
   if (loading) {
     return (

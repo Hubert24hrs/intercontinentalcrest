@@ -102,4 +102,9 @@ export class CryptoController {
     }
     return this.cryptoService.getTotalCryptoVolume();
   }
+
+  @Get('market-quotes')
+  async getMarketQuotes() {
+    return this.cryptoService.getMarketQuotes();
+  }
 }

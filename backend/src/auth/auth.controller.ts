@@ -1,10 +1,30 @@
-import { Controller, Post, Body, Res, Req, UseGuards, Get, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Patch, Body, Res, Req, UseGuards, Get, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import { Response, Request } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { Verify2FaDto } from './dto/verify-2fa.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { IsNotEmpty, IsString, MinLength, IsOptional } from 'class-validator';
+
+class UpdateProfileDto {
+  @IsOptional() @IsString() fullName?: string;
+  @IsOptional() @IsString() phone?: string;
+}
+
+class ChangePasswordDto {
+  @IsNotEmpty() @IsString() currentPassword: string;
+  @IsNotEmpty() @IsString() @MinLength(12) newPassword: string;
+}
+
+class ForgotPasswordDto {
+  @IsNotEmpty() @IsString() email: string;
+}
+
+class ResetPasswordDto {
+  @IsNotEmpty() @IsString() token: string;
+  @IsNotEmpty() @IsString() @MinLength(12) newPassword: string;
+}
 
 @Controller('auth')
 export class AuthController {
@@ -24,17 +44,10 @@ export class AuthController {
     const user = await this.authService.validateUser(loginDto);
     const result = await this.authService.login(user) as any;
 
-    if (result.require2Fa) {
-      return result;
-    }
+    if (result.require2Fa) return result;
 
-    // Set cookies for authentication
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
-
-    return {
-      user: result.user,
-      accessToken: result.accessToken,
-    };
+    return { user: result.user, accessToken: result.accessToken };
   }
 
   @Post('2fa/generate')
@@ -46,10 +59,7 @@ export class AuthController {
   @Post('2fa/verify')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async verify2Fa(
-    @Req() req: any,
-    @Body() verifyDto: Verify2FaDto,
-  ) {
+  async verify2Fa(@Req() req: any, @Body() verifyDto: Verify2FaDto) {
     return this.authService.verify2FaSetup(req.user.id, verifyDto.code);
   }
 
@@ -61,23 +71,14 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const result = await this.authService.authenticate2Fa(tempToken, code) as any;
-
-    // Set cookies for authentication
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
-
-    return {
-      user: result.user,
-      accessToken: result.accessToken,
-    };
+    return { user: result.user, accessToken: result.accessToken };
   }
 
   @Post('2fa/disable')
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  async disable2Fa(
-    @Req() req: any,
-    @Body() verifyDto: Verify2FaDto,
-  ) {
+  async disable2Fa(@Req() req: any, @Body() verifyDto: Verify2FaDto) {
     return this.authService.disable2Fa(req.user.id, verifyDto.code);
   }
 
@@ -111,19 +112,47 @@ export class AuthController {
     return { user: req.user };
   }
 
+  @Patch('profile')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async updateProfile(@Req() req: any, @Body() dto: UpdateProfileDto) {
+    return this.authService.updateProfile(req.user.id, dto);
+  }
+
+  @Patch('password')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async changePassword(@Req() req: any, @Body() dto: ChangePasswordDto) {
+    if (!dto.currentPassword || !dto.newPassword) {
+      throw new BadRequestException('Current and new password are required');
+    }
+    return this.authService.changePassword(req.user.id, dto.currentPassword, dto.newPassword);
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.forgotPassword(dto.email);
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto.token, dto.newPassword);
+  }
+
   private setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
     res.cookie('accessToken', accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 15 * 60 * 1000, // 15 minutes
+      maxAge: 15 * 60 * 1000,
     });
-
     res.cookie('refreshToken', refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+      maxAge: 7 * 24 * 60 * 60 * 1000,
     });
   }
 }
