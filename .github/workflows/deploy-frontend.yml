@@ -1,0 +1,38 @@
+name: Deploy Frontend to Vercel
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "frontend/**"
+
+env:
+  VERCEL_ORG_ID: team_Vzw9dPqgnCeaflj1qX56NfaJ
+  VERCEL_PROJECT_ID: prj_rxepflIORpxzUyLWrdnGmrcN0y0P
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: Pull Vercel environment
+        working-directory: frontend
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build
+        working-directory: frontend
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to production
+        working-directory: frontend
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
