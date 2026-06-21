@@ -37,6 +37,7 @@ export default function CryptoMarketplacePage() {
   const [isTrading, setIsTrading] = useState(false);
   const [tradeSuccess, setTradeSuccess] = useState<string | null>(null);
   const [tradeError, setTradeError] = useState<string | null>(null);
+  const [selectedWalletId, setSelectedWalletId] = useState<string>("");
 
   // Load initial data — markets load first so the page is never blank
   useEffect(() => {
@@ -256,6 +257,42 @@ export default function CryptoMarketplacePage() {
     return acc ? parseFloat(acc.availableBalance) : 0;
   }, [selectedAccountId, accounts]);
 
+  // Crypto wallets: real holdings if any, else placeholder wallets with zero balance
+  const cryptoWallets = useMemo(() => {
+    if (portfolio.holdings && portfolio.holdings.length > 0) {
+      return portfolio.holdings.map((h: any) => {
+        const coin = markets.find((m: any) => m.id === h.coinId);
+        const price = (coin && coin.current_price != null) ? coin.current_price : parseFloat(h.avgBuyPrice);
+        const qty = parseFloat(h.quantity);
+        return {
+          id: h.coinId,
+          symbol: (h.coinSymbol || "").toUpperCase(),
+          name: h.coinName || h.coinSymbol,
+          quantity: qty,
+          valueUsd: qty * price,
+          image: coin?.image,
+        };
+      });
+    }
+    return [
+      { id: "btc-wallet",  symbol: "BTC",  name: "Bitcoin",  quantity: 0, valueUsd: 0, image: undefined },
+      { id: "eth-wallet",  symbol: "ETH",  name: "Ethereum", quantity: 0, valueUsd: 0, image: undefined },
+      { id: "sol-wallet",  symbol: "SOL",  name: "Solana",   quantity: 0, valueUsd: 0, image: undefined },
+      { id: "usdt-wallet", symbol: "USDT", name: "Tether",   quantity: 0, valueUsd: 0, image: undefined },
+    ];
+  }, [portfolio.holdings, markets]);
+
+  // Auto-select first wallet when list changes (e.g., after holdings load)
+  useEffect(() => {
+    if (cryptoWallets.length > 0) {
+      const exists = cryptoWallets.some((w) => w.id === selectedWalletId);
+      if (!exists) setSelectedWalletId(cryptoWallets[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cryptoWallets]);
+
+  const selectedWallet = cryptoWallets.find((w) => w.id === selectedWalletId) ?? cryptoWallets[0] ?? null;
+
   // Estimate trade Net and Fee values
   const tradeEstimates = useMemo(() => {
     if (!selectedTradeCoin) return { subtotal: 0, fee: 0, total: 0 };
@@ -357,19 +394,24 @@ export default function CryptoMarketplacePage() {
           <div>
             <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Trading Account balance</p>
             <h2 className="text-3xl font-display font-bold mt-2 text-brand-secondary">
-              ${activeBankAccountBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+              ${(selectedWallet?.valueUsd ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
             </h2>
+            {selectedWallet && selectedWallet.quantity > 0 && (
+              <p className="text-xs text-gray-400 mt-1 font-mono">
+                {selectedWallet.quantity.toFixed(6)} {selectedWallet.symbol}
+              </p>
+            )}
           </div>
           <div className="mt-3 flex items-center justify-between text-xs border-t border-gray-50 pt-2.5">
-            <span className="text-gray-400">Default Funding Account</span>
+            <span className="text-gray-400">Crypto Wallet</span>
             <select
-              value={selectedAccountId}
-              onChange={(e) => setSelectedAccountId(e.target.value)}
+              value={selectedWalletId}
+              onChange={(e) => setSelectedWalletId(e.target.value)}
               className="bg-gray-50 border border-gray-200 text-gray-700 rounded-lg px-2.5 py-1 font-semibold text-xs outline-none focus:border-brand-primary"
             >
-              {accounts.map((acc: any) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.accountName || acc.accountType.toUpperCase()} ({acc.accountNumber.slice(-4)})
+              {cryptoWallets.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name} ({w.symbol}){w.quantity > 0 ? ` — ${w.quantity.toFixed(4)} ${w.symbol}` : " — $0.00"}
                 </option>
               ))}
             </select>
