@@ -545,35 +545,58 @@ export default function InvestmentMarketplacePage() {
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-500">
-        <Loader2 className="w-8 h-8 animate-spin text-brand-primary mb-3" />
-        <p className="text-sm">Connecting to secondary market feeds...</p>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#0A2342] to-brand-primary flex items-center justify-center shadow-lg animate-pulse">
+          <Briefcase className="w-7 h-7 text-white" />
+        </div>
+        <div className="flex items-center gap-2 text-gray-500 text-sm">
+          <Loader2 className="w-4 h-4 animate-spin text-brand-primary" />
+          Connecting to secondary market feeds...
+        </div>
       </div>
     );
   }
 
+  const totalInvested = myInvestments.filter((i: any) => i.status !== "closed").reduce((s: number, i: any) => s + parseFloat(i.principalAmount), 0);
+  const totalCurrentValue = myInvestments.filter((i: any) => i.status !== "closed").reduce((s: number, i: any) => s + parseFloat(i.currentValue || i.principalAmount), 0);
+  const totalGain = totalCurrentValue - totalInvested;
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
-      {/* Title Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="font-display font-bold text-brand-secondary text-2xl flex items-center gap-2">
-            <Briefcase className="w-6 h-6 text-brand-primary" />
-            Investment
-          </h1>
-          <p className="text-gray-500 text-sm mt-0.5">
-            Grow your wealth with diversified investment opportunities.
-          </p>
+      {/* Header */}
+      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }} className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-brand-primary to-[#0078B3] flex items-center justify-center shadow-lg flex-shrink-0">
+            <Briefcase className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h1 className="font-display font-bold text-brand-secondary text-2xl">Investment</h1>
+            <p className="text-gray-500 text-sm mt-0.5">Grow your wealth with diversified investment opportunities.</p>
+          </div>
         </div>
-        <button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-semibold hover:border-brand-primary hover:text-brand-primary transition-all disabled:opacity-50 self-start md:self-auto shadow-sm"
-        >
-          <Clock className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
-          Refresh Yields
+        <button onClick={handleRefresh} disabled={refreshing} className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-semibold hover:border-brand-primary hover:text-brand-primary transition-all disabled:opacity-50 self-start md:self-auto shadow-sm">
+          <Clock className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />Refresh Yields
         </button>
-      </div>
+      </motion.div>
+
+      {/* Portfolio summary */}
+      {myInvestments.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {[
+            { label: "Total Invested", value: `$${totalInvested.toLocaleString("en-US", { minimumFractionDigits: 2 })}`, colorClass: "text-brand-secondary", bg: "bg-white", border: "border-gray-100", icon: DollarSign },
+            { label: "Current Value", value: `$${totalCurrentValue.toLocaleString("en-US", { minimumFractionDigits: 2 })}`, colorClass: "text-brand-primary", bg: "bg-brand-primary/5", border: "border-brand-primary/10", icon: LineChart },
+            { label: "Unrealized Gain", value: `${totalGain >= 0 ? "+" : ""}$${Math.abs(totalGain).toLocaleString("en-US", { minimumFractionDigits: 2 })}`, colorClass: totalGain >= 0 ? "text-emerald-600" : "text-red-500", bg: totalGain >= 0 ? "bg-emerald-50" : "bg-red-50", border: totalGain >= 0 ? "border-emerald-100" : "border-red-100", icon: TrendingUp },
+          ].map((s, i) => (
+            <motion.div key={s.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }} className={`${s.bg} border ${s.border} rounded-2xl p-4 shadow-sm`}>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <s.icon className={`w-3.5 h-3.5 ${s.colorClass}`} />
+                <div className="text-[10px] text-gray-500 font-semibold uppercase tracking-wide">{s.label}</div>
+              </div>
+              <div className={`font-display font-bold text-xl leading-tight ${s.colorClass}`}>{s.value}</div>
+            </motion.div>
+          ))}
+        </div>
+      )}
 
       {/* Featured Portfolios Carousel/Grid */}
       <div className="space-y-3">
@@ -582,9 +605,13 @@ export default function InvestmentMarketplacePage() {
           <h2 className="font-display font-bold text-brand-secondary text-sm">Featured Opportunities</h2>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {featuredPortfolios.map((p) => (
-            <div
+          {featuredPortfolios.map((p, i) => (
+            <motion.div
               key={`feat-${p.id}`}
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: 0.1 + i * 0.07 }}
+              whileHover={{ y: -4, transition: { duration: 0.15 } }}
               className="relative bg-gradient-to-br from-[#0A2342] to-[#1e3a8a] text-white rounded-2xl p-5 border border-white/10 overflow-hidden shadow-lg group hover:shadow-xl transition-all duration-300"
             >
               <div className="absolute top-0 right-0 w-24 h-24 bg-white/5 rounded-full -translate-y-8 translate-x-8" />
@@ -616,7 +643,7 @@ export default function InvestmentMarketplacePage() {
                 Invest Now
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
-            </div>
+            </motion.div>
           ))}
         </div>
       </div>
@@ -754,11 +781,14 @@ export default function InvestmentMarketplacePage() {
         {/* Product Cards Grid */}
         {filteredProducts.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredProducts.map((p) => {
+            {filteredProducts.map((p, i) => {
               const highlight = p.isTopPerformer;
               return (
-                <div
+                <motion.div
                   key={p.id}
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.25, delay: i * 0.04 }}
                   className={`bg-white rounded-2xl p-5 border flex flex-col justify-between shadow-sm hover:shadow-card-hover transition-all duration-300 relative ${
                     highlight ? "border-brand-primary/60 ring-1 ring-brand-primary/20" : "border-gray-100"
                   }`}
@@ -815,7 +845,7 @@ export default function InvestmentMarketplacePage() {
                       <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                </div>
+                </motion.div>
               );
             })}
           </div>
