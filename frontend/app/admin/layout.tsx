@@ -154,14 +154,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       .then((res) => {
         const u = res.user;
         if (!u || !["admin", "super_admin"].includes(u.role)) {
-          window.location.href = "/login";
+          window.location.href = "/login?redirect=/admin";
           return;
         }
         setUser(u);
         setLoading(false);
       })
       .catch(() => {
-        window.location.href = "/login";
+        window.location.href = "/login?redirect=/admin";
       });
   }, []);
 
