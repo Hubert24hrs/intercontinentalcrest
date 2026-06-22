@@ -2,15 +2,22 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Globe, Eye, EyeOff, Mail, Lock, ArrowRight, Shield } from "lucide-react";
 import { authApi } from "@/lib/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
+function getRedirectTarget(role?: string): string {
+  const params = new URLSearchParams(window.location.search);
+  const redirect = params.get("redirect");
+  if (redirect && redirect.startsWith("/")) return redirect;
+  if (role && ["admin", "super_admin"].includes(role)) return "/admin";
+  return "/dashboard";
+}
+
 export default function LoginPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [showPass, setShowPass] = useState(false);
   const [step, setStep] = useState<"login" | "2fa">("login");
   const [form, setForm] = useState({ email: "", password: "", remember: false, code: "" });
@@ -41,14 +48,7 @@ export default function LoginPage() {
         if (result.user) {
           localStorage.setItem('cachedUser', JSON.stringify(result.user));
         }
-        const redirect = searchParams.get("redirect");
-        if (redirect && redirect.startsWith("/")) {
-          router.push(redirect);
-        } else if (result.user && ["admin", "super_admin"].includes(result.user.role)) {
-          router.push("/admin");
-        } else {
-          router.push("/dashboard");
-        }
+        router.push(getRedirectTarget(result.user?.role));
       }
     } catch (err: any) {
       setErrorMsg(err.message || "Invalid email or password. Please try again.");
@@ -64,14 +64,7 @@ export default function LoginPage() {
     try {
       const r = await authApi.authenticate2Fa(tempToken, form.code);
       if (r?.user) localStorage.setItem('cachedUser', JSON.stringify(r.user));
-      const redirect = searchParams.get("redirect");
-      if (redirect && redirect.startsWith("/")) {
-        router.push(redirect);
-      } else if (r?.user && ["admin", "super_admin"].includes(r.user.role)) {
-        router.push("/admin");
-      } else {
-        router.push("/dashboard");
-      }
+      router.push(getRedirectTarget(r?.user?.role));
     } catch (err: any) {
       setErrorMsg(err.message || "Invalid 2FA verification code.");
     } finally {
