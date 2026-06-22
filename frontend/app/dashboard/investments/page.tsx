@@ -346,17 +346,20 @@ export default function InvestmentMarketplacePage() {
 
   async function loadData() {
     try {
-      const [userAccounts, userInvestments, portfolio] = await Promise.all([
+      const [userAccounts, userInvestments, portfolioRaw] = await Promise.all([
         accountsApi.getAccounts(),
         investmentsApi.getMyInvestments(),
-        cryptoApi.getPortfolio().catch(() => []),
+        cryptoApi.getPortfolio().catch(() => null),
       ]);
       setAccounts(userAccounts || []);
       setMyInvestments(userInvestments || []);
       if (userAccounts && userAccounts.length > 0) {
         setSelectedAccountId(userAccounts[0].id);
       }
-      const holdings = (portfolio || []).filter((h: any) => parseFloat(h.quantity) > 0);
+      const portfolioList = Array.isArray(portfolioRaw)
+        ? portfolioRaw
+        : portfolioRaw?.holdings || [];
+      const holdings = portfolioList.filter((h: any) => parseFloat(h.quantity) > 0);
       setCryptoPortfolio(holdings);
       if (holdings.length > 0) {
         setSelectedCoinId(holdings[0].coinId);

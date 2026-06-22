@@ -59,6 +59,7 @@ export default function TransferPage() {
 
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<any>(null);
+  const [sentAmount, setSentAmount] = useState(0);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -106,6 +107,7 @@ export default function TransferPage() {
         description: description.trim() || "Fund Transfer",
         type: transferType === "international" ? "international_transfer" : "transfer",
       });
+      setSentAmount(transferAmount);
       setSuccess(result);
       setAmount("");
       setDescription("");
@@ -165,7 +167,7 @@ export default function TransferPage() {
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-2 text-sm">
               <div className="flex justify-between">
                 <span className="text-white/40">Amount Sent</span>
-                <span className="font-bold text-emerald-400">${transferAmount.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
+                <span className="font-bold text-emerald-400">${sentAmount.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
               </div>
               {success.transactionReference && (
                 <div className="flex justify-between">

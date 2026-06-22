@@ -34,6 +34,7 @@ const availablePermissions = [
 export default function AdminRolesPage() {
   const [roles, setRoles] = useState<Role[]>(initialRoles);
   const [showAddRole, setShowAddRole] = useState(false);
+  const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
   const [newRole, setNewRole] = useState({ name: "", description: "", permissions: [] as string[] });
 
   const handleTogglePermission = (permKey: string) => {
@@ -50,16 +51,29 @@ export default function AdminRolesPage() {
 
   const handleAddRole = (e: React.FormEvent) => {
     e.preventDefault();
-    const roleToAdd: Role = {
-      id: `R-${roles.length + 1}`,
-      name: newRole.name,
-      description: newRole.description,
-      userCount: 0,
-      permissions: newRole.permissions
-    };
-    setRoles(prev => [...prev, roleToAdd]);
+    if (editingRoleId) {
+      setRoles(prev => prev.map(r => r.id === editingRoleId
+        ? { ...r, name: newRole.name, description: newRole.description, permissions: newRole.permissions }
+        : r
+      ));
+    } else {
+      setRoles(prev => [...prev, {
+        id: `R-${prev.length + 1}`,
+        name: newRole.name,
+        description: newRole.description,
+        userCount: 0,
+        permissions: newRole.permissions,
+      }]);
+    }
     setShowAddRole(false);
+    setEditingRoleId(null);
     setNewRole({ name: "", description: "", permissions: [] });
+  };
+
+  const handleEditRole = (role: Role) => {
+    setEditingRoleId(role.id);
+    setNewRole({ name: role.name, description: role.description, permissions: [...role.permissions] });
+    setShowAddRole(true);
   };
 
   return (
@@ -125,7 +139,10 @@ export default function AdminRolesPage() {
                 <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
                 ISO 27001 Compliant Rule
               </span>
-              <button className="text-xs text-brand-primary font-semibold hover:underline">
+              <button
+                onClick={() => handleEditRole(role)}
+                className="text-xs text-brand-primary font-semibold hover:underline"
+              >
                 Edit Privileges
               </button>
             </div>
@@ -137,7 +154,7 @@ export default function AdminRolesPage() {
       {showAddRole && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl animate-fade-in max-h-[90vh] overflow-y-auto">
-            <h2 className="font-display font-bold text-brand-secondary text-lg mb-2">Create Security Role</h2>
+            <h2 className="font-display font-bold text-brand-secondary text-lg mb-2">{editingRoleId ? "Edit Security Role" : "Create Security Role"}</h2>
             <p className="text-gray-500 text-xs mb-4">Define a new access tier for support or compliance operators.</p>
             
             <form onSubmit={handleAddRole} className="space-y-4">
@@ -194,7 +211,7 @@ export default function AdminRolesPage() {
               <div className="flex gap-3 pt-4 border-t border-gray-100">
                 <button
                   type="button"
-                  onClick={() => setShowAddRole(false)}
+                  onClick={() => { setShowAddRole(false); setEditingRoleId(null); setNewRole({ name: "", description: "", permissions: [] }); }}
                   className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 text-sm font-semibold transition-colors"
                 >
                   Cancel
@@ -203,7 +220,7 @@ export default function AdminRolesPage() {
                   type="submit"
                   className="flex-1 btn-primary text-sm py-2.5"
                 >
-                  Create Role
+                  {editingRoleId ? "Save Changes" : "Create Role"}
                 </button>
               </div>
             </form>

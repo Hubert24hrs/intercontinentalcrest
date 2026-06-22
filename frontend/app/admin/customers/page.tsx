@@ -26,11 +26,11 @@ export default function AdminCustomersPage() {
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   // Load clients list
-  async function loadCustomers() {
+  async function loadCustomers(pageNum = page) {
     setLoading(true);
     try {
       const res = await adminApi.getUsers({
-        page,
+        page: pageNum,
         limit: 15,
         search: search || undefined,
         status: filterStatus === "all" ? undefined : filterStatus
@@ -52,7 +52,7 @@ export default function AdminCustomersPage() {
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setPage(1);
-    loadCustomers();
+    loadCustomers(1);
   };
 
   const handleUpdateStatus = async (userId: string, newStatus: string) => {

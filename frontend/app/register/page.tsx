@@ -82,6 +82,7 @@ export default function RegisterPage() {
           email: form.email,
           password: form.password,
           phone: form.phone,
+          ...(form.dob ? { dateOfBirth: form.dob } : {}),
         });
 
         // Auto-login after successful registration

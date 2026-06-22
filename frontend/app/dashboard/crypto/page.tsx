@@ -440,7 +440,7 @@ export default function CryptoMarketplacePage() {
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <img src={coin.image} alt={coin.name} className="w-8 h-8 rounded-full" />
+                    <img src={coin.image} alt={coin.name} className="w-8 h-8 rounded-full" onError={(e) => { const t = e.target as HTMLImageElement; t.onerror = null; t.src = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%23e2e8f0'/%3E%3Ctext x='16' y='21' text-anchor='middle' font-size='12' fill='%2364748b'%3E${encodeURIComponent(coin.symbol?.charAt(0)?.toUpperCase() || '?')}%3C/text%3E%3C/svg%3E`; }} />
                     <div>
                       <div className="font-bold text-sm text-brand-secondary flex items-center gap-1.5">
                         {coin.name}

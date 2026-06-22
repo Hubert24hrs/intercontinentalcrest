@@ -124,7 +124,7 @@ export default function AdminKycPage() {
                       <tr 
                         key={k.id} 
                         className={`hover:bg-gray-50/50 transition-colors cursor-pointer ${selected?.id === k.id ? "bg-brand-primary/5" : ""}`} 
-                        onClick={() => setSelected(selected?.id === k.id ? null : k)}
+                        onClick={() => { setSelected(selected?.id === k.id ? null : k); setErrorMsg(null); }}
                       >
                         <td className="py-3.5 pr-4">
                           <div className="flex items-center gap-3">
