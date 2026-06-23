@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Body,
   Param,
   Query,
@@ -123,6 +124,12 @@ export class AdminController {
       parseInt(limit, 10),
       status,
     );
+  }
+
+  @Delete('users/:id')
+  async deleteUser(@Param('id') id: string, @Req() req: any) {
+    this.checkAdmin(req);
+    return this.adminService.deleteUser(id, req.user.id);
   }
 
   @Get('audit')

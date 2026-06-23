@@ -541,6 +541,10 @@ export const adminApi = {
   getAuditLogs: (page: number = 1, limit: number = 50) => {
     return request(`/admin/audit?page=${page}&limit=${limit}`);
   },
+
+  deleteUser: (userId: string) => {
+    return request(`/admin/users/${userId}`, { method: 'DELETE' });
+  },
 };
 
 export const walletsApi = {

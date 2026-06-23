@@ -371,6 +371,44 @@ export class AdminService {
     return { message: 'Crypto credited successfully', ...dto };
   }
 
+  async deleteUser(userId: string, adminId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    if (user.role === 'super_admin') throw new BadRequestException('Cannot delete a super_admin account');
+    if (userId === adminId) throw new BadRequestException('Cannot delete your own account');
+
+    await this.prisma.$transaction(async (tx) => {
+      // Delete child records in dependency order before deleting user
+      const accounts = await tx.account.findMany({ where: { userId } });
+      const accountIds = accounts.map((a) => a.id);
+
+      await tx.transaction.deleteMany({
+        where: { OR: [{ senderAccountId: { in: accountIds } }, { receiverAccountId: { in: accountIds } }] },
+      });
+      await tx.account.deleteMany({ where: { userId } });
+      await tx.cryptoOrder.deleteMany({ where: { userId } });
+      await tx.cryptoHolding.deleteMany({ where: { userId } });
+      await tx.investment.deleteMany({ where: { userId } });
+      await tx.loan.deleteMany({ where: { userId } });
+      await tx.kycDocument.deleteMany({ where: { userId } });
+      await tx.notification.deleteMany({ where: { userId } });
+      await tx.auditLog.deleteMany({ where: { userId } });
+      await tx.user.delete({ where: { id: userId } });
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'DELETE_USER',
+        entityType: 'User',
+        entityId: userId,
+        oldValues: JSON.stringify({ email: user.email, fullName: user.fullName }),
+      },
+    });
+
+    return { message: 'User account permanently deleted', userId };
+  }
+
   async getAuditLogs(page: number = 1, limit: number = 50) {
     const skip = (page - 1) * limit;
     const [logs, total] = await Promise.all([

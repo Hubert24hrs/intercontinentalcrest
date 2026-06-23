@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Search, UserCheck, UserX, Eye, Loader2, RefreshCw, X, ShieldAlert } from "lucide-react";
+import { Search, UserCheck, UserX, Eye, Loader2, RefreshCw, X, ShieldAlert, Trash2 } from "lucide-react";
 import { adminApi } from "@/lib/api";
 
 const statusColors: Record<string, string> = {
@@ -24,6 +24,8 @@ export default function AdminCustomersPage() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [customerDetail, setCustomerDetail] = useState<any>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+
+  const [deletingUser, setDeletingUser] = useState(false);
 
   // Load clients list
   async function loadCustomers(pageNum = page) {
@@ -78,6 +80,21 @@ export default function AdminCustomersPage() {
       }
     } catch (err) {
       alert("Failed to update role");
+    }
+  };
+
+  const handleDeleteUser = async (userId: string, fullName: string) => {
+    if (!confirm(`Permanently delete "${fullName}"? This cannot be undone.`)) return;
+    setDeletingUser(true);
+    try {
+      await adminApi.deleteUser(userId);
+      setSelectedCustomerId(null);
+      setCustomerDetail(null);
+      await loadCustomers();
+    } catch (err: any) {
+      alert(err?.message || "Failed to delete user");
+    } finally {
+      setDeletingUser(false);
     }
   };
 
@@ -329,9 +346,19 @@ export default function AdminCustomersPage() {
               )}
             </div>
             
-            <div className="p-5 border-t border-gray-100 bg-gray-55 flex justify-end">
-              <button 
-                onClick={() => setSelectedCustomerId(null)} 
+            <div className="p-5 border-t border-gray-100 bg-gray-55 flex items-center justify-between">
+              {customerDetail && (
+                <button
+                  onClick={() => handleDeleteUser(customerDetail.id, customerDetail.fullName)}
+                  disabled={deletingUser}
+                  className="flex items-center gap-1.5 px-4 py-2.5 bg-red-50 border border-red-200 text-red-600 rounded-full font-semibold hover:bg-red-100 transition-colors text-xs disabled:opacity-50"
+                >
+                  {deletingUser ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  Delete Account
+                </button>
+              )}
+              <button
+                onClick={() => setSelectedCustomerId(null)}
                 className="px-5 py-2.5 bg-brand-secondary text-white rounded-full font-semibold hover:bg-brand-primary transition-colors text-xs"
               >
                 Close Inspector
