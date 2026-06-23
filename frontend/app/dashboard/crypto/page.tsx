@@ -43,7 +43,6 @@ export default function CryptoMarketplacePage() {
   const [isTrading, setIsTrading] = useState(false);
   const [tradeSuccess, setTradeSuccess] = useState<string | null>(null);
   const [tradeError, setTradeError] = useState<string | null>(null);
-  const [selectedWalletId, setSelectedWalletId] = useState<string>("");
 
   // Load initial data — markets load first so the page is never blank
   useEffect(() => {

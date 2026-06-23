@@ -516,6 +516,20 @@ export const adminApi = {
     });
   },
 
+  creditAccount: (accountId: string, data: { amount: number; description?: string }) => {
+    return request(`/admin/accounts/${accountId}/credit`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
+  creditCrypto: (userId: string, data: { coinId: string; coinSymbol: string; coinName: string; quantity: number }) => {
+    return request(`/admin/users/${userId}/credit-crypto`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+
   getTransactions: (filters: { page?: number; limit?: number; status?: string } = {}) => {
     const query = new URLSearchParams();
     if (filters.page) query.set('page', String(filters.page));

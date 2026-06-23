@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Post,
   Patch,
   Body,
   Param,
@@ -72,6 +73,31 @@ export class AdminController {
   ) {
     this.checkAdmin(req);
     return this.adminService.updateUserRole(id, dto.role, req.user.id);
+  }
+
+  @Post('accounts/:id/credit')
+  async creditBankAccount(
+    @Param('id') id: string,
+    @Req() req: any,
+    @Body() dto: { amount: number; description?: string },
+  ) {
+    this.checkAdmin(req);
+    return this.adminService.creditBankAccount(
+      id,
+      dto.amount,
+      dto.description || 'Admin Credit',
+      req.user.id,
+    );
+  }
+
+  @Post('users/:id/credit-crypto')
+  async creditCrypto(
+    @Param('id') id: string,
+    @Req() req: any,
+    @Body() dto: { coinId: string; coinSymbol: string; coinName: string; quantity: number },
+  ) {
+    this.checkAdmin(req);
+    return this.adminService.creditCrypto(id, dto, req.user.id);
   }
 
   @Patch('accounts/:id/freeze')

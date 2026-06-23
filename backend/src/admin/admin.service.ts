@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Decimal } from '@prisma/client/runtime/library';
 
 @Injectable()
 export class AdminService {
@@ -251,6 +252,123 @@ export class AdminService {
       limit,
       totalPages: Math.ceil(total / limit),
     };
+  }
+
+  async creditBankAccount(
+    accountId: string,
+    amount: number,
+    description: string,
+    adminId: string,
+  ) {
+    if (amount <= 0) throw new BadRequestException('Amount must be greater than 0');
+
+    const account = await this.prisma.account.findUnique({
+      where: { id: accountId },
+    });
+    if (!account) throw new NotFoundException('Account not found');
+
+    const decimal = new Decimal(amount);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.account.update({
+        where: { id: accountId },
+        data: {
+          balance: { increment: decimal },
+          availableBalance: { increment: decimal },
+        },
+      });
+
+      await tx.transaction.create({
+        data: {
+          transactionReference:
+            'ADMIN-CR-' + Date.now() + '-' + Math.floor(Math.random() * 10000),
+          receiverAccountId: accountId,
+          amount: decimal,
+          fee: new Decimal(0),
+          currency: 'USD',
+          status: 'completed',
+          type: 'credit',
+          description: description || 'Admin Credit',
+        },
+      });
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'ADMIN_CREDIT_ACCOUNT',
+        entityType: 'Account',
+        entityId: accountId,
+        newValues: JSON.stringify({ amount, description }),
+      },
+    });
+
+    await this.prisma.notification.create({
+      data: {
+        userId: account.userId,
+        title: 'Funds Credited to Your Account',
+        message: `$${Number(decimal).toLocaleString('en-US', { minimumFractionDigits: 2 })} has been credited to your account (${account.accountNumber}). ${description ? `Note: ${description}` : ''}`.trim(),
+        type: 'success',
+      },
+    });
+
+    return { message: 'Account credited successfully', amount, accountId };
+  }
+
+  async creditCrypto(
+    userId: string,
+    dto: { coinId: string; coinSymbol: string; coinName: string; quantity: number },
+    adminId: string,
+  ) {
+    if (dto.quantity <= 0) throw new BadRequestException('Quantity must be greater than 0');
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    const qtyDecimal = new Decimal(dto.quantity);
+
+    const existing = await this.prisma.cryptoHolding.findUnique({
+      where: { userId_coinId: { userId, coinId: dto.coinId } },
+    });
+
+    if (existing) {
+      await this.prisma.cryptoHolding.update({
+        where: { userId_coinId: { userId, coinId: dto.coinId } },
+        data: { quantity: { increment: qtyDecimal } },
+      });
+    } else {
+      await this.prisma.cryptoHolding.create({
+        data: {
+          userId,
+          coinId: dto.coinId,
+          coinSymbol: dto.coinSymbol.toUpperCase(),
+          coinName: dto.coinName,
+          quantity: qtyDecimal,
+          avgBuyPrice: new Decimal(0),
+        },
+      });
+    }
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: 'ADMIN_CREDIT_CRYPTO',
+        entityType: 'CryptoHolding',
+        entityId: userId,
+        newValues: JSON.stringify(dto),
+      },
+    });
+
+    await this.prisma.notification.create({
+      data: {
+        userId,
+        title: `${dto.coinName} Credited to Your Portfolio`,
+        message: `${dto.quantity} ${dto.coinSymbol.toUpperCase()} has been credited to your crypto portfolio.`,
+        type: 'success',
+      },
+    });
+
+    return { message: 'Crypto credited successfully', ...dto };
   }
 
   async getAuditLogs(page: number = 1, limit: number = 50) {
