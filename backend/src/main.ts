@@ -4,6 +4,8 @@ import cookieParser = require('cookie-parser');
 import { AppModule } from './app.module';
 import * as fs from 'fs';
 import * as path from 'path';
+import { PrismaClient } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 
 let cachedServer: any;
 
@@ -28,6 +30,26 @@ function corsOriginHandler(origin: string | undefined, callback: (err: Error | n
   }
 
   callback(null, false);
+}
+
+async function syncAdminCredentials() {
+  const adminEmail = process.env.ADMIN_EMAIL;
+  const adminPassword = process.env.ADMIN_PASSWORD;
+  if (!adminEmail || !adminPassword) return;
+
+  const prisma = new PrismaClient();
+  try {
+    const hash = await bcrypt.hash(adminPassword, 12);
+    const existing = await prisma.user.findFirst({ where: { role: 'super_admin' } });
+    if (existing) {
+      await prisma.user.update({ where: { id: existing.id }, data: { email: adminEmail, passwordHash: hash } });
+      console.log(`[Admin] Credentials synced → ${adminEmail}`);
+    }
+  } catch (e: any) {
+    console.error('[Admin] Failed to sync credentials:', e?.message);
+  } finally {
+    await prisma.$disconnect();
+  }
 }
 
 export async function bootstrapExpress(): Promise<any> {
@@ -68,6 +90,7 @@ export async function bootstrapExpress(): Promise<any> {
     }
 
     process.env.DATABASE_URL = 'file:/tmp/dev.db';
+    await syncAdminCredentials();
   }
 
   const app = await NestFactory.create(AppModule, { logger: ['error', 'warn', 'log'] });
