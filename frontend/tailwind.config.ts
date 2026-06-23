@@ -99,6 +99,10 @@ const config: Config = {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0.5" },
         },
+        "ticker-scroll": {
+          "0%": { transform: "translateX(0)" },
+          "100%": { transform: "translateX(-50%)" },
+        },
       },
       animation: {
         "fade-in": "fade-in 0.6s ease-out forwards",
@@ -106,6 +110,7 @@ const config: Config = {
         "fade-in-right": "fade-in-right 0.6s ease-out forwards",
         shimmer: "shimmer 2s linear infinite",
         float: "float 3s ease-in-out infinite",
+        "ticker-scroll": "ticker-scroll 70s linear infinite",
       },
       boxShadow: {
         card: "0 4px 24px rgba(0, 183, 241, 0.08)",

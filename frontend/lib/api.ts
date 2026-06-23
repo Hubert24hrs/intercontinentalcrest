@@ -40,11 +40,26 @@ function buildHeaders(options: RequestInit, token?: string | null): Headers {
 async function request(path: string, options: RequestInit = {}) {
   const url = `${API_BASE}${path}`;
 
-  let response = await fetch(url, {
-    ...options,
-    headers: buildHeaders(options),
-    credentials: 'include',
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: buildHeaders(options),
+      credentials: 'include',
+    });
+  } catch (netErr: any) {
+    // Network failure (connection refused, offline, CORS block, browser-extension interference)
+    const msg: string = netErr?.message || '';
+    if (msg === 'Failed to fetch' || msg.startsWith('Cannot read properties')) {
+      throw new Error('Unable to reach the server. Please check your connection and try again.');
+    }
+    throw new Error(msg || 'Network error. Please try again.');
+  }
+
+  // Guard against browser-extension interference returning a non-Response
+  if (!response || typeof response.status !== 'number') {
+    throw new Error('Unexpected network response. Please try again.');
+  }
 
   // On 401, silently refresh the access token and retry once
   if (response.status === 401 && !path.startsWith('/auth/')) {
@@ -146,6 +161,34 @@ export const authApi = {
 
   me: () => {
     return request('/auth/me');
+  },
+
+  updateProfile: (data: { fullName?: string; phone?: string }) => {
+    return request('/auth/profile', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
+
+  changePassword: (data: { currentPassword: string; newPassword: string }) => {
+    return request('/auth/password', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  },
+
+  forgotPassword: (email: string) => {
+    return request('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  },
+
+  resetPassword: (data: { token: string; newPassword: string }) => {
+    return request('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   },
 };
 
@@ -395,6 +438,10 @@ export const cryptoApi = {
     });
   },
 
+  getMyOrders: (page: number = 1, limit: number = 20) => {
+    return request(`/crypto/orders/me?page=${page}&limit=${limit}`);
+  },
+
   // Admin Crypto
   getAllOrders: (page: number = 1, limit: number = 50) => {
     return request(`/crypto/admin/orders?page=${page}&limit=${limit}`);
@@ -500,5 +547,9 @@ export const walletsApi = {
       body: JSON.stringify(data),
     });
   },
+};
+
+export const marketApi = {
+  getQuotes: () => request('/crypto/market-quotes'),
 };
 

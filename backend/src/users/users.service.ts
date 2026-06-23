@@ -1,7 +1,8 @@
-import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { User, Prisma } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 
 @Injectable()
 export class UsersService {
@@ -111,6 +112,54 @@ export class UsersService {
     await this.prisma.user.update({
       where: { id: userId },
       data: { twoFactorEnabled: false, twoFactorSecret: null },
+    });
+  }
+
+  async updateProfile(userId: string, data: { fullName?: string; phone?: string }): Promise<User> {
+    if (data.phone) {
+      const existing = await this.prisma.user.findFirst({
+        where: { phone: data.phone, NOT: { id: userId } },
+      });
+      if (existing) throw new ConflictException('Phone number already in use');
+    }
+    return this.prisma.user.update({ where: { id: userId }, data });
+  }
+
+  async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<void> {
+    const user = await this.findOneById(userId);
+    if (!user) throw new NotFoundException('User not found');
+    const matches = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!matches) throw new ConflictException('Current password is incorrect');
+    const salt = await bcrypt.genSalt(12);
+    const passwordHash = await bcrypt.hash(newPassword, salt);
+    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+  }
+
+  async createPasswordResetToken(email: string): Promise<{ token: string; user: User } | null> {
+    const user = await this.findOneByEmail(email);
+    if (!user) return null;
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordResetToken: token, passwordResetExpiry: expiry },
+    });
+    return { token, user };
+  }
+
+  async resetPasswordWithToken(token: string, newPassword: string): Promise<void> {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        passwordResetToken: token,
+        passwordResetExpiry: { gt: new Date() },
+      },
+    });
+    if (!user) throw new BadRequestException('Reset token is invalid or has expired');
+    const salt = await bcrypt.genSalt(12);
+    const passwordHash = await bcrypt.hash(newPassword, salt);
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash, passwordResetToken: null, passwordResetExpiry: null },
     });
   }
 }

@@ -22,6 +22,8 @@ model User {
   phoneVerified        Boolean       @default(false) @map("phone_verified")
   twoFactorEnabled     Boolean       @default(false) @map("two_factor_enabled")
   twoFactorSecret      String?       @map("two_factor_secret")
+  passwordResetToken   String?       @map("password_reset_token")
+  passwordResetExpiry  DateTime?     @map("password_reset_expiry")
   failedLoginAttempts  Int           @default(0) @map("failed_login_attempts")
   lockedUntil          DateTime?     @map("locked_until")
   lastLogin            DateTime?     @map("last_login")

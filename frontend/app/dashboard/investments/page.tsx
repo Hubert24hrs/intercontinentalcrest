@@ -21,7 +21,7 @@ import {
   Percent,
   X
 } from "lucide-react";
-import { accountsApi, investmentsApi } from "@/lib/api";
+import { accountsApi, investmentsApi, cryptoApi } from "@/lib/api";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface InvestmentProduct {
@@ -327,11 +327,16 @@ export default function InvestmentMarketplacePage() {
   const [activeFilter, setActiveFilter] = useState("All");
   const [sortBy, setSortBy] = useState<"default" | "growth">("default");
 
+  // Crypto portfolio for funding source
+  const [cryptoPortfolio, setCryptoPortfolio] = useState<any[]>([]);
+
   // Modal/Invest Form states
   const [selectedProduct, setSelectedProduct] = useState<InvestmentProduct | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [principalAmount, setPrincipalAmount] = useState("");
   const [selectedAccountId, setSelectedAccountId] = useState("");
+  const [fundingType, setFundingType] = useState<"crypto" | "bank">("crypto");
+  const [selectedCoinId, setSelectedCoinId] = useState("");
   const [isInvesting, setIsInvesting] = useState(false);
   const [investSuccess, setInvestSuccess] = useState<string | null>(null);
   const [investError, setInvestError] = useState<string | null>(null);
@@ -341,14 +346,26 @@ export default function InvestmentMarketplacePage() {
 
   async function loadData() {
     try {
-      const [userAccounts, userInvestments] = await Promise.all([
+      const [userAccounts, userInvestments, portfolioRaw] = await Promise.all([
         accountsApi.getAccounts(),
-        investmentsApi.getMyInvestments()
+        investmentsApi.getMyInvestments(),
+        cryptoApi.getPortfolio().catch(() => null),
       ]);
       setAccounts(userAccounts || []);
       setMyInvestments(userInvestments || []);
       if (userAccounts && userAccounts.length > 0) {
         setSelectedAccountId(userAccounts[0].id);
+      }
+      const portfolioList = Array.isArray(portfolioRaw)
+        ? portfolioRaw
+        : portfolioRaw?.holdings || [];
+      const holdings = portfolioList.filter((h: any) => parseFloat(h.quantity) > 0);
+      setCryptoPortfolio(holdings);
+      if (holdings.length > 0) {
+        setSelectedCoinId(holdings[0].coinId);
+        setFundingType("crypto");
+      } else {
+        setFundingType("bank");
       }
     } catch (err) {
       console.error("Failed to load investment page data", err);
@@ -372,12 +389,19 @@ export default function InvestmentMarketplacePage() {
     setPrincipalAmount(product.minInvestment.toString());
     setInvestSuccess(null);
     setInvestError(null);
+    // Default to crypto funding if holdings exist, else bank
+    if (cryptoPortfolio.length > 0) {
+      setFundingType("crypto");
+      setSelectedCoinId(cryptoPortfolio[0].coinId);
+    } else {
+      setFundingType("bank");
+    }
     setModalOpen(true);
   };
 
   const handleCreateInvestment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedProduct || !selectedAccountId) return;
+    if (!selectedProduct) return;
 
     const amt = parseFloat(principalAmount);
     if (isNaN(amt) || amt < selectedProduct.minInvestment) {
@@ -385,11 +409,24 @@ export default function InvestmentMarketplacePage() {
       return;
     }
 
-    const fundingAccount = accounts.find(a => a.id === selectedAccountId);
-    const balance = fundingAccount ? parseFloat(fundingAccount.availableBalance) : 0;
-    if (balance < amt) {
-      setInvestError("Insufficient funds in the selected funding account");
-      return;
+    if (fundingType === "crypto") {
+      const holding = cryptoPortfolio.find(h => h.coinId === selectedCoinId);
+      if (!holding) {
+        setInvestError("Please select a crypto asset to fund this investment.");
+        return;
+      }
+      const usdValue = parseFloat(holding.currentValue || "0");
+      if (usdValue < amt) {
+        setInvestError(`Insufficient ${holding.coinSymbol} balance. Available: ~$${usdValue.toLocaleString("en-US", { maximumFractionDigits: 2 })}`);
+        return;
+      }
+    } else {
+      const fundingAccount = accounts.find(a => a.id === selectedAccountId);
+      const balance = fundingAccount ? parseFloat(fundingAccount.availableBalance) : 0;
+      if (balance < amt) {
+        setInvestError("Insufficient funds in the selected account.");
+        return;
+      }
     }
 
     setIsInvesting(true);
@@ -397,24 +434,44 @@ export default function InvestmentMarketplacePage() {
     setInvestSuccess(null);
 
     try {
-      // Calculate a mock maturity date based on product termMonths
-      const maturityDate = new Date();
-      maturityDate.setMonth(maturityDate.getMonth() + selectedProduct.termMonths);
+      // For crypto-funded investment: sell crypto → proceeds go to primary bank account → invest
+      if (fundingType === "crypto") {
+        const holding = cryptoPortfolio.find(h => h.coinId === selectedCoinId);
+        const primaryAccount = accounts[0];
+        if (!holding || !primaryAccount) throw new Error("No valid funding source found.");
 
-      await investmentsApi.createInvestment({
-        planName: selectedProduct.name,
-        principalAmount: amt,
-        interestRate: selectedProduct.maxReturn, // Store the APY/interest rate
-        termMonths: selectedProduct.termMonths,
-        accountId: selectedAccountId
-      });
+        const pricePerUnit = parseFloat(holding.currentValue) / parseFloat(holding.quantity);
+        const quantityToSell = amt / pricePerUnit;
+
+        await cryptoApi.sellCrypto({
+          coinId: holding.coinId,
+          coinSymbol: holding.coinSymbol,
+          coinName: holding.coinName,
+          quantity: quantityToSell,
+          toAccountId: primaryAccount.id,
+        });
+
+        await investmentsApi.createInvestment({
+          planName: selectedProduct.name,
+          principalAmount: amt,
+          interestRate: selectedProduct.maxReturn,
+          termMonths: selectedProduct.termMonths,
+          accountId: primaryAccount.id,
+        });
+      } else {
+        await investmentsApi.createInvestment({
+          planName: selectedProduct.name,
+          principalAmount: amt,
+          interestRate: selectedProduct.maxReturn,
+          termMonths: selectedProduct.termMonths,
+          accountId: selectedAccountId,
+        });
+      }
 
       setInvestSuccess(`Successfully opened "${selectedProduct.name}"!`);
       setPrincipalAmount("");
-      
-      // Refresh local data to show new investment and updated balances
       await loadData();
-      
+
       setTimeout(() => {
         setModalOpen(false);
         setInvestSuccess(null);
@@ -491,35 +548,58 @@ export default function InvestmentMarketplacePage() {
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-500">
-        <Loader2 className="w-8 h-8 animate-spin text-brand-primary mb-3" />
-        <p className="text-sm">Connecting to secondary market feeds...</p>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#0A2342] to-brand-primary flex items-center justify-center shadow-lg animate-pulse">
+          <Briefcase className="w-7 h-7 text-white" />
+        </div>
+        <div className="flex items-center gap-2 text-gray-500 text-sm">
+          <Loader2 className="w-4 h-4 animate-spin text-brand-primary" />
+          Connecting to secondary market feeds...
+        </div>
       </div>
     );
   }
 
+  const totalInvested = myInvestments.filter((i: any) => i.status !== "closed").reduce((s: number, i: any) => s + parseFloat(i.principalAmount), 0);
+  const totalCurrentValue = myInvestments.filter((i: any) => i.status !== "closed").reduce((s: number, i: any) => s + parseFloat(i.currentValue || i.principalAmount), 0);
+  const totalGain = totalCurrentValue - totalInvested;
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
-      {/* Title Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="font-display font-bold text-brand-secondary text-2xl flex items-center gap-2">
-            <Briefcase className="w-6 h-6 text-brand-primary" />
-            Investment
-          </h1>
-          <p className="text-gray-500 text-sm mt-0.5">
-            Grow your wealth with diversified investment opportunities.
-          </p>
+      {/* Header */}
+      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }} className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-brand-primary to-[#0078B3] flex items-center justify-center shadow-lg flex-shrink-0">
+            <Briefcase className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h1 className="font-display font-bold text-brand-secondary text-2xl">Investment</h1>
+            <p className="text-gray-500 text-sm mt-0.5">Grow your wealth with diversified investment opportunities.</p>
+          </div>
         </div>
-        <button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-semibold hover:border-brand-primary hover:text-brand-primary transition-all disabled:opacity-50 self-start md:self-auto shadow-sm"
-        >
-          <Clock className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
-          Refresh Yields
+        <button onClick={handleRefresh} disabled={refreshing} className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm font-semibold hover:border-brand-primary hover:text-brand-primary transition-all disabled:opacity-50 self-start md:self-auto shadow-sm">
+          <Clock className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />Refresh Yields
         </button>
-      </div>
+      </motion.div>
+
+      {/* Portfolio summary */}
+      {myInvestments.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {[
+            { label: "Total Invested", value: `$${totalInvested.toLocaleString("en-US", { minimumFractionDigits: 2 })}`, colorClass: "text-brand-secondary", bg: "bg-white", border: "border-gray-100", icon: DollarSign },
+            { label: "Current Value", value: `$${totalCurrentValue.toLocaleString("en-US", { minimumFractionDigits: 2 })}`, colorClass: "text-brand-primary", bg: "bg-brand-primary/5", border: "border-brand-primary/10", icon: LineChart },
+            { label: "Unrealized Gain", value: `${totalGain >= 0 ? "+" : ""}$${Math.abs(totalGain).toLocaleString("en-US", { minimumFractionDigits: 2 })}`, colorClass: totalGain >= 0 ? "text-emerald-600" : "text-red-500", bg: totalGain >= 0 ? "bg-emerald-50" : "bg-red-50", border: totalGain >= 0 ? "border-emerald-100" : "border-red-100", icon: TrendingUp },
+          ].map((s, i) => (
+            <motion.div key={s.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }} className={`${s.bg} border ${s.border} rounded-2xl p-4 shadow-sm`}>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <s.icon className={`w-3.5 h-3.5 ${s.colorClass}`} />
+                <div className="text-[10px] text-gray-500 font-semibold uppercase tracking-wide">{s.label}</div>
+              </div>
+              <div className={`font-display font-bold text-xl leading-tight ${s.colorClass}`}>{s.value}</div>
+            </motion.div>
+          ))}
+        </div>
+      )}
 
       {/* Featured Portfolios Carousel/Grid */}
       <div className="space-y-3">
@@ -528,22 +608,23 @@ export default function InvestmentMarketplacePage() {
           <h2 className="font-display font-bold text-brand-secondary text-sm">Featured Opportunities</h2>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {featuredPortfolios.map((p) => (
-            <div
+          {featuredPortfolios.map((p, i) => (
+            <motion.div
               key={`feat-${p.id}`}
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: 0.1 + i * 0.07 }}
+              whileHover={{ y: -4, transition: { duration: 0.15 } }}
               className="relative bg-gradient-to-br from-[#0A2342] to-[#1e3a8a] text-white rounded-2xl p-5 border border-white/10 overflow-hidden shadow-lg group hover:shadow-xl transition-all duration-300"
             >
               <div className="absolute top-0 right-0 w-24 h-24 bg-white/5 rounded-full -translate-y-8 translate-x-8" />
-              <div className="flex justify-between items-start mb-4">
+              <div className="flex items-start mb-4">
                 <span className="text-[10px] bg-brand-primary/20 text-brand-primary border border-brand-primary/30 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
                   {p.category}
                 </span>
-                <span className="text-[10px] bg-red-500/20 text-red-300 border border-red-500/30 px-2 py-0.5 rounded-full font-semibold uppercase">
-                  {p.riskLevel} Risk
-                </span>
               </div>
-              <h3 className="font-display font-bold text-base line-clamp-1">{p.name}</h3>
-              <p className="text-white/60 text-xs mt-1.5 line-clamp-2 h-8 leading-relaxed">
+              <h3 className="font-display font-bold text-base leading-snug">{p.name}</h3>
+              <p className="text-white/60 text-xs mt-1.5 line-clamp-2 leading-relaxed">
                 {p.description}
               </p>
               
@@ -565,7 +646,7 @@ export default function InvestmentMarketplacePage() {
                 Invest Now
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
-            </div>
+            </motion.div>
           ))}
         </div>
       </div>
@@ -703,11 +784,14 @@ export default function InvestmentMarketplacePage() {
         {/* Product Cards Grid */}
         {filteredProducts.length > 0 ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {filteredProducts.map((p) => {
+            {filteredProducts.map((p, i) => {
               const highlight = p.isTopPerformer;
               return (
-                <div
+                <motion.div
                   key={p.id}
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.25, delay: i * 0.04 }}
                   className={`bg-white rounded-2xl p-5 border flex flex-col justify-between shadow-sm hover:shadow-card-hover transition-all duration-300 relative ${
                     highlight ? "border-brand-primary/60 ring-1 ring-brand-primary/20" : "border-gray-100"
                   }`}
@@ -721,23 +805,15 @@ export default function InvestmentMarketplacePage() {
 
                   {/* Header info */}
                   <div className="space-y-3">
-                    <div className="flex justify-between items-start">
+                    <div className="flex items-start">
                       <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-bold uppercase">
                         {p.category}
-                      </span>
-                      <span className={`text-[9px] px-2 py-0.5 rounded-full font-extrabold uppercase border ${
-                        p.riskLevel === "Low" ? "bg-green-50 text-green-700 border-green-200" :
-                        p.riskLevel === "Medium" ? "bg-amber-50 text-amber-700 border-amber-200" :
-                        p.riskLevel === "High" ? "bg-red-50 text-red-700 border-red-200" :
-                        "bg-purple-50 text-purple-700 border-purple-200"
-                      }`}>
-                        {p.riskLevel} Risk
                       </span>
                     </div>
 
                     <div>
-                      <h3 className="font-display font-bold text-brand-secondary text-base line-clamp-1">{p.name}</h3>
-                      <p className="text-gray-500 text-xs mt-1.5 line-clamp-3 leading-relaxed h-12">
+                      <h3 className="font-display font-bold text-brand-secondary text-base leading-snug">{p.name}</h3>
+                      <p className="text-gray-500 text-xs mt-1.5 line-clamp-3 leading-relaxed min-h-[3.5rem]">
                         {p.description}
                       </p>
                     </div>
@@ -772,7 +848,7 @@ export default function InvestmentMarketplacePage() {
                       <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                </div>
+                </motion.div>
               );
             })}
           </div>
@@ -829,7 +905,7 @@ export default function InvestmentMarketplacePage() {
                 <Sparkles className="w-4 h-4 text-brand-primary" />
                 Initialize Investment Plan
               </h2>
-              <p className="text-gray-500 text-[11px] mb-4">Set up a high-yield portfolio funded instantly by your local bank deposits.</p>
+              <p className="text-gray-500 text-[11px] mb-4">Fund your portfolio directly from your crypto wallet or bank account.</p>
 
               {/* Status Alert Banners */}
               {investSuccess && (
@@ -869,21 +945,82 @@ export default function InvestmentMarketplacePage() {
 
               {/* Form Input fields */}
               <form onSubmit={handleCreateInvestment} className="space-y-4">
-                {/* Funding account selector */}
+                {/* Funding source — crypto or bank */}
                 <div>
-                  <label className="block text-xs font-semibold text-gray-600 mb-1.5">Select Funding Source</label>
-                  <select
-                    value={selectedAccountId}
-                    onChange={(e) => setSelectedAccountId(e.target.value)}
-                    className="form-input"
-                    required
-                  >
-                    {accounts.map((acc: any) => (
-                      <option key={acc.id} value={acc.id}>
-                        {acc.accountName || acc.accountType.toUpperCase()} - {acc.accountNumber} (Bal: ${parseFloat(acc.availableBalance).toLocaleString("en-US", { minimumFractionDigits: 2 })})
-                      </option>
-                    ))}
-                  </select>
+                  <label className="block text-xs font-semibold text-gray-600 mb-2">Select Funding Source</label>
+
+                  {/* Tab toggle */}
+                  <div className="flex gap-1.5 p-1 bg-gray-100 rounded-xl mb-3">
+                    <button
+                      type="button"
+                      onClick={() => setFundingType("crypto")}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[11px] font-bold transition-all ${fundingType === "crypto" ? "bg-white text-brand-primary shadow-sm" : "text-gray-500"}`}
+                    >
+                      <Coins className="w-3.5 h-3.5" />
+                      Crypto Wallet
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFundingType("bank")}
+                      className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[11px] font-bold transition-all ${fundingType === "bank" ? "bg-white text-brand-secondary shadow-sm" : "text-gray-500"}`}
+                    >
+                      <DollarSign className="w-3.5 h-3.5" />
+                      Bank Account
+                    </button>
+                  </div>
+
+                  {/* Crypto holdings list */}
+                  {fundingType === "crypto" && (
+                    cryptoPortfolio.length > 0 ? (
+                      <div className="space-y-2 max-h-44 overflow-y-auto pr-0.5">
+                        {cryptoPortfolio.map((h: any) => {
+                          const usdVal = parseFloat(h.currentValue || "0");
+                          const qty = parseFloat(h.quantity || "0");
+                          const isSelected = selectedCoinId === h.coinId;
+                          return (
+                            <button
+                              key={h.coinId}
+                              type="button"
+                              onClick={() => setSelectedCoinId(h.coinId)}
+                              className={`w-full flex items-center gap-3 p-3 rounded-xl border text-left transition-all active:scale-[0.98] ${isSelected ? "border-brand-primary bg-brand-primary/5 ring-1 ring-brand-primary/20" : "border-gray-100 bg-gray-50 hover:border-gray-200"}`}
+                            >
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-[10px] font-extrabold ${isSelected ? "bg-brand-primary text-white" : "bg-gray-200 text-gray-600"}`}>
+                                {h.coinSymbol?.slice(0, 3)}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-bold text-brand-secondary">{h.coinName}</div>
+                                <div className="text-[10px] text-gray-500 font-mono">{qty.toFixed(6)} {h.coinSymbol}</div>
+                              </div>
+                              <div className="text-right flex-shrink-0">
+                                <div className="text-xs font-bold text-emerald-600">${usdVal.toLocaleString("en-US", { maximumFractionDigits: 2 })}</div>
+                                <div className="text-[9px] text-gray-400">≈ USD</div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[11px] text-amber-800 text-center">
+                        No crypto holdings found. Switch to Bank Account funding or buy crypto first.
+                      </div>
+                    )
+                  )}
+
+                  {/* Bank account native select — properly styled for mobile */}
+                  {fundingType === "bank" && (
+                    <select
+                      value={selectedAccountId}
+                      onChange={(e) => setSelectedAccountId(e.target.value)}
+                      required
+                      className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm font-medium text-brand-secondary bg-white focus:outline-none focus:ring-2 focus:ring-brand-primary/30 focus:border-brand-primary transition-colors appearance-auto"
+                    >
+                      {accounts.map((acc: any) => (
+                        <option key={acc.id} value={acc.id}>
+                          {acc.accountName || acc.accountType?.toUpperCase() || "Account"} — ${parseFloat(acc.availableBalance).toLocaleString("en-US", { minimumFractionDigits: 2 })} available
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
 
                 {/* Capital input */}

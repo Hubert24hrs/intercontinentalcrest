@@ -22,6 +22,7 @@ import {
   Check,
 } from "lucide-react";
 import { loansApi, accountsApi } from "@/lib/api";
+import { motion } from "framer-motion";
 
 const LOAN_TYPES = [
   { value: "crypto",    label: "Crypto Loan",           rate: 9.5,  rateType: "APY" },
@@ -181,9 +182,14 @@ export default function LoansPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-500">
-        <Loader2 className="w-8 h-8 animate-spin text-brand-primary mb-3" />
-        <p className="text-sm">Accessing credit registry records...</p>
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#0A2342] to-brand-primary flex items-center justify-center shadow-lg animate-pulse">
+          <Landmark className="w-7 h-7 text-white" />
+        </div>
+        <div className="flex items-center gap-2 text-gray-500 text-sm">
+          <Loader2 className="w-4 h-4 animate-spin text-brand-primary" />
+          Accessing credit registry records...
+        </div>
       </div>
     );
   }
@@ -195,25 +201,25 @@ export default function LoansPage() {
   return (
     <div className="space-y-6 max-w-7xl mx-auto text-xs text-brand-secondary">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="font-display font-bold text-brand-secondary text-2xl flex items-center gap-2">
-            <Landmark className="w-6 h-6 text-brand-primary" />
-            Lending &amp; Credit
-          </h1>
-          <p className="text-gray-500 text-sm mt-0.5">
-            Apply for self-directed loans, review pending approvals, and view outstanding balances.
-          </p>
+      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-brand-primary to-[#0078B3] flex items-center justify-center shadow-lg flex-shrink-0">
+            <Landmark className="w-5 h-5 text-white" />
+          </div>
+          <div>
+            <h1 className="font-display font-bold text-brand-secondary text-2xl">Lending &amp; Credit</h1>
+            <p className="text-gray-500 text-sm mt-0.5">Apply for self-directed loans and view outstanding balances.</p>
+          </div>
         </div>
         <button
           onClick={() => { setRefreshing(true); loadData(); }}
           disabled={refreshing}
-          className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-xs font-semibold hover:border-brand-primary hover:text-brand-primary transition-all disabled:opacity-50 self-start sm:self-auto shadow-sm cursor-pointer"
+          className="flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl text-xs font-semibold hover:border-brand-primary hover:text-brand-primary transition-all disabled:opacity-50 self-start sm:self-auto shadow-sm cursor-pointer"
         >
           <Clock className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
           Refresh Records
         </button>
-      </div>
+      </motion.div>
 
       {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -221,14 +227,14 @@ export default function LoansPage() {
           { label: "Active Debt Balance", value: `$${totalDebt.toLocaleString("en-US", { minimumFractionDigits: 2 })}`, icon: <DollarSign className="w-5 h-5 text-red-500" />, bg: "bg-red-50" },
           { label: "Active Lines of Credit", value: activeLoans.length, icon: <CheckCircle2 className="w-5 h-5 text-green-600" />, bg: "bg-green-50" },
           { label: "Applications Pending Review", value: pendingLoans.length, icon: <Clock className="w-5 h-5 text-yellow-500" />, bg: "bg-yellow-50" },
-        ].map(({ label, value, icon, bg }) => (
-          <div key={label} className="bg-white border border-gray-100 p-5 rounded-2xl flex items-center justify-between shadow-sm">
+        ].map(({ label, value, icon, bg }, i) => (
+          <motion.div key={label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.06 }} className="bg-white border border-gray-100 p-5 rounded-2xl flex items-center justify-between shadow-sm">
             <div>
               <div className="text-[10px] text-gray-500 font-bold uppercase tracking-wider">{label}</div>
               <div className="font-display font-bold text-xl text-brand-secondary mt-1 font-mono">{value}</div>
             </div>
             <div className={`w-10 h-10 rounded-full ${bg} flex items-center justify-center`}>{icon}</div>
-          </div>
+          </motion.div>
         ))}
       </div>
 

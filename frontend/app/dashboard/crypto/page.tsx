@@ -43,6 +43,7 @@ export default function CryptoMarketplacePage() {
   const [isTrading, setIsTrading] = useState(false);
   const [tradeSuccess, setTradeSuccess] = useState<string | null>(null);
   const [tradeError, setTradeError] = useState<string | null>(null);
+  const [selectedWalletId, setSelectedWalletId] = useState<string>("");
 
   // Load initial data — markets load first so the page is never blank
   useEffect(() => {
@@ -269,6 +270,42 @@ export default function CryptoMarketplacePage() {
     return acc ? parseFloat(acc.availableBalance) : 0;
   }, [selectedAccountId, accounts]);
 
+  // Crypto wallets: real holdings if any, else placeholder wallets with zero balance
+  const cryptoWallets = useMemo(() => {
+    if (portfolio.holdings && portfolio.holdings.length > 0) {
+      return portfolio.holdings.map((h: any) => {
+        const coin = markets.find((m: any) => m.id === h.coinId);
+        const price = (coin && coin.current_price != null) ? coin.current_price : parseFloat(h.avgBuyPrice);
+        const qty = parseFloat(h.quantity);
+        return {
+          id: h.coinId,
+          symbol: (h.coinSymbol || "").toUpperCase(),
+          name: h.coinName || h.coinSymbol,
+          quantity: qty,
+          valueUsd: qty * price,
+          image: coin?.image,
+        };
+      });
+    }
+    return [
+      { id: "btc-wallet",  symbol: "BTC",  name: "Bitcoin",  quantity: 0, valueUsd: 0, image: undefined },
+      { id: "eth-wallet",  symbol: "ETH",  name: "Ethereum", quantity: 0, valueUsd: 0, image: undefined },
+      { id: "sol-wallet",  symbol: "SOL",  name: "Solana",   quantity: 0, valueUsd: 0, image: undefined },
+      { id: "usdt-wallet", symbol: "USDT", name: "Tether",   quantity: 0, valueUsd: 0, image: undefined },
+    ];
+  }, [portfolio.holdings, markets]);
+
+  // Auto-select first wallet when list changes (e.g., after holdings load)
+  useEffect(() => {
+    if (cryptoWallets.length > 0) {
+      const exists = cryptoWallets.some((w) => w.id === selectedWalletId);
+      if (!exists) setSelectedWalletId(cryptoWallets[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cryptoWallets]);
+
+  const selectedWallet = cryptoWallets.find((w) => w.id === selectedWalletId) ?? cryptoWallets[0] ?? null;
+
   // Estimate trade Net and Fee values
   const tradeEstimates = useMemo(() => {
     if (!selectedTradeCoin) return { subtotal: 0, fee: 0, total: 0 };
@@ -357,51 +394,32 @@ export default function CryptoMarketplacePage() {
           <p className="text-xs text-gray-400 mt-3">Calculated relative to weighted buy history</p>
         </div>
 
-        {/* Crypto Wallet Addresses Card */}
-        <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm flex flex-col gap-3">
-          <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Crypto Deposit Addresses</p>
-          <select
-            value={selectedWalletId}
-            onChange={(e) => { setSelectedWalletId(e.target.value); setAddressCopied(false); }}
-            className="bg-gray-50 border border-gray-200 text-brand-secondary rounded-xl px-3 py-2.5 font-semibold text-xs outline-none focus:border-brand-primary"
-          >
-            {wallets.map((w: any) => (
-              <option key={w.id} value={w.id}>
-                {w.coinName} ({w.coinSymbol})
-              </option>
-            ))}
-            {wallets.length === 0 && (
-              <option disabled>Loading wallets…</option>
+        <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm flex flex-col justify-between">
+          <div>
+            <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Trading Account balance</p>
+            <h2 className="text-3xl font-display font-bold mt-2 text-brand-secondary">
+              ${(selectedWallet?.valueUsd ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+            </h2>
+            {selectedWallet && selectedWallet.quantity > 0 && (
+              <p className="text-xs text-gray-400 mt-1 font-mono">
+                {selectedWallet.quantity.toFixed(6)} {selectedWallet.symbol}
+              </p>
             )}
-          </select>
-          {(() => {
-            const wallet = wallets.find((w: any) => w.id === selectedWalletId);
-            if (!wallet) return null;
-            return (
-              <div className="flex flex-col gap-2">
-                <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 flex items-center justify-between gap-2">
-                  <span className="font-mono text-[11px] text-brand-secondary break-all leading-snug">
-                    {wallet.address}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(wallet.address);
-                      setAddressCopied(true);
-                      setTimeout(() => setAddressCopied(false), 2000);
-                    }}
-                    className="shrink-0 p-1.5 rounded-lg bg-brand-primary/10 hover:bg-brand-primary/20 text-brand-primary transition-all"
-                    title="Copy address"
-                  >
-                    {addressCopied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
-                <p className="text-[10px] text-gray-400 text-center">
-                  Only send <span className="font-bold text-brand-secondary">{wallet.coinSymbol}</span> to this address. Wrong coin = permanent loss.
-                </p>
-              </div>
-            );
-          })()}
+          </div>
+          <div className="mt-3 flex items-center justify-between text-xs border-t border-gray-50 pt-2.5">
+            <span className="text-gray-400">Crypto Wallet</span>
+            <select
+              value={selectedWalletId}
+              onChange={(e) => setSelectedWalletId(e.target.value)}
+              className="bg-gray-50 border border-gray-200 text-gray-700 rounded-lg px-2.5 py-1 font-semibold text-xs outline-none focus:border-brand-primary"
+            >
+              {cryptoWallets.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name} ({w.symbol}){w.quantity > 0 ? ` — ${w.quantity.toFixed(4)} ${w.symbol}` : " — $0.00"}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
@@ -426,7 +444,7 @@ export default function CryptoMarketplacePage() {
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <img src={coin.image} alt={coin.name} className="w-8 h-8 rounded-full" />
+                    <img src={coin.image} alt={coin.name} className="w-8 h-8 rounded-full" onError={(e) => { const t = e.target as HTMLImageElement; t.onerror = null; t.src = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%23e2e8f0'/%3E%3Ctext x='16' y='21' text-anchor='middle' font-size='12' fill='%2364748b'%3E${encodeURIComponent(coin.symbol?.charAt(0)?.toUpperCase() || '?')}%3C/text%3E%3C/svg%3E`; }} />
                     <div>
                       <div className="font-bold text-sm text-brand-secondary flex items-center gap-1.5">
                         {coin.name}

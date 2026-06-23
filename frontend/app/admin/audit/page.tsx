@@ -13,10 +13,10 @@ export default function AdminAuditLogsPage() {
   const [loading, setLoading] = useState(true);
   const [selectedLog, setSelectedLog] = useState<any | null>(null);
 
-  async function loadLogs() {
+  async function loadLogs(pageNum = page) {
     setLoading(true);
     try {
-      const res = await adminApi.getAuditLogs(page, 20);
+      const res = await adminApi.getAuditLogs(pageNum, 20);
       setLogs(res.logs || []);
       setTotal(res.total || 0);
       setTotalPages(res.totalPages || 1);
@@ -33,10 +33,15 @@ export default function AdminAuditLogsPage() {
 
   const handleManualRefresh = () => {
     setPage(1);
-    loadLogs();
+    loadLogs(1);
   };
 
   // Client side search matching action, entityType, or operator email
+  function safeJson(str: string | null | undefined) {
+    if (!str) return "";
+    try { return JSON.stringify(JSON.parse(str), null, 2); } catch { return str; }
+  }
+
   const filteredLogs = logs.filter((log) => {
     const action = log.action || "";
     const email = log.user?.email || "";
@@ -207,7 +212,7 @@ export default function AdminAuditLogsPage() {
                 <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
                   <div className="text-[10px] text-gray-400 font-bold uppercase mb-1">Before State values</div>
                   <pre className="font-mono text-xs bg-white border border-gray-200 p-2.5 rounded-lg overflow-x-auto max-h-32 text-gray-700 select-all">
-                    {JSON.stringify(JSON.parse(selectedLog.oldValues), null, 2)}
+                    {safeJson(selectedLog.oldValues)}
                   </pre>
                 </div>
               )}
@@ -216,7 +221,7 @@ export default function AdminAuditLogsPage() {
                 <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
                   <div className="text-[10px] text-gray-400 font-bold uppercase mb-1">Applied Change values</div>
                   <pre className="font-mono text-xs bg-white border border-gray-200 p-2.5 rounded-lg overflow-x-auto max-h-32 text-gray-700 select-all">
-                    {JSON.stringify(JSON.parse(selectedLog.newValues), null, 2)}
+                    {safeJson(selectedLog.newValues)}
                   </pre>
                 </div>
               )}

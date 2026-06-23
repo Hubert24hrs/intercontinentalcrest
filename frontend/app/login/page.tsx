@@ -8,6 +8,14 @@ import { authApi } from "@/lib/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
+function getRedirectTarget(role?: string): string {
+  const params = new URLSearchParams(window.location.search);
+  const redirect = params.get("redirect");
+  if (redirect && redirect.startsWith("/")) return redirect;
+  if (role && ["admin", "super_admin"].includes(role)) return "/admin";
+  return "/dashboard";
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [showPass, setShowPass] = useState(false);
@@ -37,11 +45,10 @@ export default function LoginPage() {
         setTempToken(result.tempToken);
         setStep("2fa");
       } else {
-        // Cache user so the dashboard renders instantly without an extra /me round-trip
         if (result.user) {
           localStorage.setItem('cachedUser', JSON.stringify(result.user));
         }
-        router.push("/dashboard");
+        router.push(getRedirectTarget(result.user?.role));
       }
     } catch (err: any) {
       setErrorMsg(err.message || "Invalid email or password. Please try again.");
@@ -57,7 +64,7 @@ export default function LoginPage() {
     try {
       const r = await authApi.authenticate2Fa(tempToken, form.code);
       if (r?.user) localStorage.setItem('cachedUser', JSON.stringify(r.user));
-      router.push("/dashboard");
+      router.push(getRedirectTarget(r?.user?.role));
     } catch (err: any) {
       setErrorMsg(err.message || "Invalid 2FA verification code.");
     } finally {

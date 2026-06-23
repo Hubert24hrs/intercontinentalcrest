@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import LoansSection from "@/components/sections/LoansSection";
-import Link from "next/link";
-import { Calculator, Clock, FileText, CheckCircle2 } from "lucide-react";
+import { Clock, FileText, CheckCircle2, Calculator } from "lucide-react";
+import LoanCalculator from "./LoanCalculator";
 
 export const metadata: Metadata = {
   title: "Loans",
@@ -70,52 +70,7 @@ export default function LoansPage() {
 
         <LoansSection />
 
-        {/* Loan Calculator */}
-        <section className="py-16 bg-white">
-          <div className="container mx-auto px-4 max-w-2xl">
-            <div className="text-center mb-8">
-              <p className="section-label mb-3">Loan Calculator</p>
-              <h2 className="section-title">Estimate Your Monthly Payment</h2>
-            </div>
-            <div className="bg-gray-50 rounded-3xl p-8 shadow-card">
-              <div className="space-y-5">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-2" htmlFor="loan-amount">
-                    Loan Amount
-                  </label>
-                  <input id="loan-amount" type="number" defaultValue={25000} className="form-input" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-2" htmlFor="loan-rate">
-                    Annual Interest Rate (%)
-                  </label>
-                  <input id="loan-rate" type="number" defaultValue={5.9} step={0.1} className="form-input" />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-2" htmlFor="loan-term">
-                    Loan Term (months)
-                  </label>
-                  <input id="loan-term" type="number" defaultValue={60} className="form-input" />
-                </div>
-                <div className="bg-brand-secondary rounded-2xl p-5 text-white">
-                  <div className="grid grid-cols-2 gap-4 text-center">
-                    <div>
-                      <div className="text-brand-primary font-display font-bold text-2xl">$483</div>
-                      <div className="text-gray-400 text-xs mt-1">Monthly Payment</div>
-                    </div>
-                    <div>
-                      <div className="text-brand-accent font-display font-bold text-2xl">$3,980</div>
-                      <div className="text-gray-400 text-xs mt-1">Total Interest</div>
-                    </div>
-                  </div>
-                </div>
-                <Link href="/register" className="btn-primary w-full justify-center">
-                  Apply Now
-                </Link>
-              </div>
-            </div>
-          </div>
-        </section>
+        <LoanCalculator />
       </main>
       <Footer />
     </>
