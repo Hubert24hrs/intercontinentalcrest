@@ -11,24 +11,38 @@ async function main() {
   console.log('Seeding database...');
 
   // ── Admin user ────────────────────────────────────────────────────────────
-  const adminEmail = 'admin@intercontinentalcrest.com';
-  const adminExists = await prisma.user.findUnique({ where: { email: adminEmail } });
+  // Credentials are read from environment variables — never hardcoded.
+  // Set ADMIN_EMAIL and ADMIN_PASSWORD in your deployment environment before running the seed.
+  const adminEmail = process.env.ADMIN_EMAIL;
+  const adminPassword = process.env.ADMIN_PASSWORD;
 
-  if (!adminExists) {
-    const adminHash = await bcrypt.hash('Admin@2026!', 12);
-    const admin = await prisma.user.create({
-      data: {
-        fullName: 'Super Admin',
-        email: adminEmail,
-        passwordHash: adminHash,
-        role: 'super_admin',
-        status: 'active',
-        emailVerified: true,
-      },
-    });
-    console.log(`Created admin: ${admin.email}`);
+  if (!adminEmail || !adminPassword) {
+    console.warn('ADMIN_EMAIL or ADMIN_PASSWORD env var not set — skipping admin upsert.');
   } else {
-    console.log(`Admin already exists: ${adminEmail}`);
+    const adminHash = await bcrypt.hash(adminPassword, 12);
+
+    // Find existing super_admin by role so we can update even if the email changed
+    const existingAdmin = await prisma.user.findFirst({ where: { role: 'super_admin' } });
+
+    if (existingAdmin) {
+      await prisma.user.update({
+        where: { id: existingAdmin.id },
+        data: { email: adminEmail, passwordHash: adminHash },
+      });
+      console.log(`Updated admin credentials → ${adminEmail}`);
+    } else {
+      const admin = await prisma.user.create({
+        data: {
+          fullName: 'Super Admin',
+          email: adminEmail,
+          passwordHash: adminHash,
+          role: 'super_admin',
+          status: 'active',
+          emailVerified: true,
+        },
+      });
+      console.log(`Created admin: ${admin.email}`);
+    }
   }
 
   // ── Demo customer ─────────────────────────────────────────────────────────

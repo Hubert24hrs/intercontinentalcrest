@@ -8,14 +8,10 @@ import {
   ArrowUpRight,
   ArrowDownLeft,
   Coins,
-  QrCode,
-  ArrowRight,
   Loader2,
   RefreshCw,
   AlertCircle,
-  TrendingUp,
   ShieldCheck,
-  ExternalLink,
   History
 } from "lucide-react";
 import { walletsApi, cryptoApi, transactionsApi } from "@/lib/api";
@@ -25,7 +21,7 @@ export default function WalletsPage() {
   const [wallets, setWallets] = useState<any[]>([]);
   const [markets, setMarkets] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedWalletId, setSelectedWalletId] = useState<string>("");
   const [activeSubTab, setActiveSubTab] = useState<"deposit" | "withdraw" | "history">("deposit");
@@ -33,7 +29,7 @@ export default function WalletsPage() {
   // Copy status
   const [copied, setCopied] = useState(false);
 
-  // Simulation forms
+  // Deposit / Withdrawal forms
   const [depositAmount, setDepositAmount] = useState("");
   const [isDepositing, setIsDepositing] = useState(false);
   const [depositSuccess, setDepositSuccess] = useState<string | null>(null);
@@ -174,15 +170,6 @@ export default function WalletsPage() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-500">
-        <Loader2 className="w-8 h-8 animate-spin text-brand-primary mb-3" />
-        <p className="text-sm">Retrieving secure cryptographic nodes...</p>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6 max-w-7xl mx-auto text-xs text-brand-secondary">
       {/* Title Header */}
@@ -193,7 +180,7 @@ export default function WalletsPage() {
             Crypto Custody Wallets
           </h1>
           <p className="text-gray-500 text-sm mt-0.5">
-            Manage your deposit addresses, track live crypto assets, and run transfer simulations.
+            Manage your deposit addresses and track live crypto assets.
           </p>
         </div>
         <button
@@ -328,111 +315,98 @@ export default function WalletsPage() {
                 {/* Sub Tab Contents */}
                 <div>
                   {activeSubTab === "deposit" && (
-                    <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
-                      
-                      {/* Left: Address details and QR */}
-                      <div className="md:col-span-5 space-y-4 flex flex-col items-center md:items-stretch">
-                        <div className="bg-gray-50 border border-gray-100 p-4 rounded-2xl flex flex-col items-center justify-center">
-                          {/* Simulated premium QR code */}
-                          <div className="bg-white p-3.5 rounded-2xl border border-gray-100 shadow-sm relative group">
-                            <div className="w-32 h-32 flex items-center justify-center text-gray-300">
-                              <QrCode className="w-28 h-28 text-brand-secondary" />
-                            </div>
-                            <div className="absolute inset-0 bg-[#0A2342]/90 text-white rounded-2xl flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 text-[10px] p-2 text-center font-bold">
-                              <ShieldCheck className="w-6 h-6 text-brand-primary mb-1 animate-pulse" />
-                              Custody Secured Address
-                            </div>
+                    <div className="space-y-5 max-w-xl">
+                      {/* Wallet address row */}
+                      <div className="space-y-1.5">
+                        <label className="text-gray-500 font-semibold block text-[10px] uppercase tracking-wide flex items-center gap-1">
+                          <ShieldCheck className="w-3 h-3 text-emerald-500" />
+                          Your {selectedWallet.coinSymbol} Deposit Address
+                        </label>
+                        <div className="flex gap-2">
+                          <div className="bg-gray-50 border border-gray-200 p-3.5 rounded-xl font-mono text-[11px] text-brand-secondary break-all flex-1 select-all leading-relaxed">
+                            {selectedWallet.address}
                           </div>
-                          <span className="text-[10px] text-gray-400 mt-2 flex items-center gap-1">
-                            <ShieldCheck className="w-3 h-3 text-emerald-500" />
-                            Secure Deposit Address
-                          </span>
-                        </div>
-
-                        {/* Copy Address details */}
-                        <div className="space-y-1 w-full">
-                          <label className="text-gray-500 font-semibold block text-[10px]">Your {selectedWallet.coinSymbol} Address</label>
-                          <div className="flex gap-2">
-                            <div className="bg-gray-50 border border-gray-150 p-3 rounded-xl font-mono text-[10px] text-brand-secondary break-all flex-1 select-all">
-                              {selectedWallet.address}
-                            </div>
-                            <button
-                              onClick={handleCopyAddress}
-                              className="px-3.5 bg-gray-50 border border-gray-200 hover:border-brand-primary rounded-xl text-gray-600 hover:text-brand-primary transition-all flex items-center justify-center shadow-sm cursor-pointer"
-                              title="Copy to clipboard"
-                            >
-                              {copied ? <Check className="w-4 h-4 text-emerald-500 animate-bounce" /> : <Copy className="w-4 h-4" />}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Right: Simulation form */}
-                      <div className="md:col-span-7 space-y-4">
-                        <div className="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-2xl space-y-1.5 leading-relaxed">
-                          <h3 className="font-bold text-amber-900 text-xs flex items-center gap-1.5">
-                            <AlertCircle className="w-4 h-4 text-amber-600 animate-pulse" />
-                            Important Deposit Instructions:
-                          </h3>
-                          <p className="text-[11px] font-medium">
-                            Send only <strong className="text-amber-950">{selectedWallet.coinSymbol}</strong> to this address. Sending other assets will result in permanent loss. Payouts are credited instantly after 1 block confirmation.
-                          </p>
-                        </div>
-
-                        <form onSubmit={handleDeposit} className="space-y-4">
-                          <h4 className="font-bold text-brand-secondary text-xs flex items-center gap-1">
-                            <Coins className="w-3.5 h-3.5 text-brand-primary" />
-                            Deposit / Credit Wallet
-                          </h4>
-
-                          {depositSuccess && (
-                            <div className="bg-green-50 border border-green-200 text-green-700 p-3 rounded-xl flex items-center gap-2">
-                              <Check className="w-4 h-4 text-green-600 flex-shrink-0" />
-                              <span>{depositSuccess}</span>
-                            </div>
-                          )}
-
-                          {depositError && (
-                            <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl flex items-center gap-2">
-                              <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
-                              <span>{depositError}</span>
-                            </div>
-                          )}
-
-                          <div className="space-y-1.5">
-                            <label className="text-gray-600 font-semibold block">Deposit Amount ({selectedWallet.coinSymbol})</label>
-                            <div className="relative">
-                              <input
-                                type="number"
-                                step="any"
-                                required
-                                value={depositAmount}
-                                onChange={(e) => setDepositAmount(e.target.value)}
-                                placeholder="e.g. 0.25"
-                                className="form-input pr-16"
-                              />
-                              <span className="absolute right-3.5 top-1/2 -translate-y-1/2 font-bold font-mono text-gray-400">
-                                {selectedWallet.coinSymbol}
-                              </span>
-                            </div>
-                          </div>
-
                           <button
-                            type="submit"
-                            disabled={isDepositing}
-                            className="w-full btn-primary py-3 justify-center text-xs"
+                            onClick={handleCopyAddress}
+                            className="px-3.5 bg-gray-50 border border-gray-200 hover:border-brand-primary rounded-xl text-gray-600 hover:text-brand-primary transition-all flex items-center justify-center shadow-sm cursor-pointer shrink-0"
+                            title="Copy to clipboard"
                           >
-                            {isDepositing ? (
-                              <>
-                                <Loader2 className="w-4 h-4 animate-spin text-white" />
-                                Crediting node...
-                              </>
-                            ) : (
-                              "Confirm Deposit"
-                            )}
+                            {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
                           </button>
-                        </form>
+                        </div>
                       </div>
+
+                      {/* Important notice */}
+                      <div className="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-2xl space-y-1.5 leading-relaxed">
+                        <h3 className="font-bold text-amber-900 text-xs flex items-center gap-1.5">
+                          <AlertCircle className="w-4 h-4 text-amber-600" />
+                          Important Deposit Instructions:
+                        </h3>
+                        <p className="text-[11px] font-medium">
+                          Send only <strong className="text-amber-950">{selectedWallet.coinSymbol}</strong> to this address. Sending other assets will result in permanent loss. Payouts are credited instantly after 1 block confirmation.
+                        </p>
+                      </div>
+
+                      {/* Deposit form */}
+                      <form onSubmit={handleDeposit} className="space-y-4">
+                        <h4 className="font-bold text-brand-secondary text-xs flex items-center gap-1">
+                          <Coins className="w-3.5 h-3.5 text-brand-primary" />
+                          Deposit Amount
+                        </h4>
+
+                        {depositSuccess && (
+                          <div className="bg-green-50 border border-green-200 text-green-700 p-3 rounded-xl flex items-center gap-2">
+                            <Check className="w-4 h-4 text-green-600 flex-shrink-0" />
+                            <span>{depositSuccess}</span>
+                          </div>
+                        )}
+
+                        {depositError && (
+                          <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                            <span>{depositError}</span>
+                          </div>
+                        )}
+
+                        <div className="space-y-1.5">
+                          <label className="text-gray-600 font-semibold block">Amount ({selectedWallet.coinSymbol})</label>
+                          <div className="relative">
+                            <input
+                              type="number"
+                              step="any"
+                              min="0.000001"
+                              required
+                              value={depositAmount}
+                              onChange={(e) => setDepositAmount(e.target.value)}
+                              placeholder="e.g. 0.25"
+                              className="form-input pr-16"
+                            />
+                            <span className="absolute right-3.5 top-1/2 -translate-y-1/2 font-bold font-mono text-gray-400">
+                              {selectedWallet.coinSymbol}
+                            </span>
+                          </div>
+                          {depositAmount && !isNaN(parseFloat(depositAmount)) && (
+                            <p className="text-[10px] text-gray-400 font-mono">
+                              ≈ ${(parseFloat(depositAmount) * currentPrice).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD at current price
+                            </p>
+                          )}
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={isDepositing}
+                          className="w-full btn-primary py-3 justify-center text-xs"
+                        >
+                          {isDepositing ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin text-white" />
+                              Processing deposit...
+                            </>
+                          ) : (
+                            "Confirm Deposit"
+                          )}
+                        </button>
+                      </form>
                     </div>
                   )}
 

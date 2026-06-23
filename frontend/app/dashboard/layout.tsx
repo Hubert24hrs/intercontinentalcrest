@@ -27,6 +27,7 @@ const navItems = [
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [notifications, setNotifications] = useState<any[]>([]);
@@ -289,7 +290,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               {/* Notifications */}
               <div className="relative">
                 <button
-                  onClick={() => setNotifOpen(!notifOpen)}
+                  onClick={() => { setNotifOpen(!notifOpen); setProfileOpen(false); }}
                   className="relative p-2 rounded-xl hover:bg-gray-100 transition-colors cursor-pointer"
                   aria-label="Notifications"
                   id="notif-btn"
@@ -341,9 +342,70 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 )}
               </div>
 
-              {/* Avatar */}
-              <div className="w-9 h-9 rounded-full bg-brand-primary flex items-center justify-center cursor-pointer">
-                <User className="w-4 h-4 text-white" />
+              {/* Avatar / Profile */}
+              <div className="relative">
+                <button
+                  onClick={() => { setProfileOpen(!profileOpen); setNotifOpen(false); }}
+                  className="w-9 h-9 rounded-full bg-brand-primary flex items-center justify-center cursor-pointer hover:opacity-90 transition-opacity"
+                  aria-label="Profile"
+                >
+                  <User className="w-4 h-4 text-white" />
+                </button>
+                {profileOpen && (
+                  <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden z-50">
+                    {/* Header */}
+                    <div className="bg-gradient-to-br from-brand-secondary to-[#0D3663] px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-full bg-brand-primary flex items-center justify-center flex-shrink-0">
+                          <User className="w-6 h-6 text-white" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="font-display font-bold text-white text-sm truncate">{user?.fullName || "Client"}</div>
+                          <div className="text-white/60 text-[11px] truncate mt-0.5">{user?.email || ""}</div>
+                        </div>
+                      </div>
+                    </div>
+                    {/* Details */}
+                    <div className="p-4 space-y-2.5 text-xs">
+                      <div className="flex items-center justify-between py-2 border-b border-gray-50">
+                        <span className="text-gray-400 font-medium">Role</span>
+                        <span className="px-2 py-0.5 rounded-full bg-brand-primary/10 text-brand-primary font-bold uppercase tracking-wide text-[10px]">
+                          {user?.role === "super_admin" ? "Super Admin" : user?.role === "admin" ? "Admin" : "Customer"}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-gray-50">
+                        <span className="text-gray-400 font-medium">Account Status</span>
+                        <span className="px-2 py-0.5 rounded-full bg-green-50 text-green-700 font-bold uppercase tracking-wide text-[10px]">Active</span>
+                      </div>
+                      <div className="flex items-center justify-between py-2 border-b border-gray-50">
+                        <span className="text-gray-400 font-medium">2FA Security</span>
+                        <span className={`px-2 py-0.5 rounded-full font-bold uppercase tracking-wide text-[10px] ${user?.twoFactorEnabled ? "bg-green-50 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                          {user?.twoFactorEnabled ? "Enabled" : "Disabled"}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between py-2">
+                        <span className="text-gray-400 font-medium">Member ID</span>
+                        <span className="font-mono text-brand-secondary font-bold text-[11px]">{user?.id ? user.id.slice(0, 8).toUpperCase() : "—"}</span>
+                      </div>
+                    </div>
+                    {/* Footer actions */}
+                    <div className="px-4 pb-4 flex gap-2">
+                      <Link
+                        href="/dashboard/settings"
+                        onClick={() => setProfileOpen(false)}
+                        className="flex-1 text-center py-2 rounded-xl bg-brand-primary/10 text-brand-primary text-xs font-bold hover:bg-brand-primary hover:text-white transition-all"
+                      >
+                        Edit Profile
+                      </Link>
+                      <button
+                        onClick={() => { setProfileOpen(false); handleLogout(); }}
+                        className="flex-1 py-2 rounded-xl bg-red-50 text-red-500 text-xs font-bold hover:bg-red-500 hover:text-white transition-all"
+                      >
+                        Sign Out
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>

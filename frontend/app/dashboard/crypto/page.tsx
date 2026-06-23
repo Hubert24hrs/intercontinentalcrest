@@ -4,12 +4,13 @@ import { useState, useEffect, useMemo } from "react";
 import {
   Coins, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownLeft,
   DollarSign, Wallet, RefreshCw, Star, Info, ChevronRight,
-  CheckCircle2, AlertTriangle, Eye, EyeOff, Loader2, ArrowRight
+  CheckCircle2, AlertTriangle, Eye, EyeOff, Loader2, ArrowRight,
+  Copy, Check
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
 } from "recharts";
-import { cryptoApi, accountsApi } from "@/lib/api";
+import { cryptoApi, accountsApi, walletsApi } from "@/lib/api";
 
 export default function CryptoMarketplacePage() {
   // Live market and portfolio state
@@ -18,7 +19,7 @@ export default function CryptoMarketplacePage() {
   const [accounts, setAccounts] = useState<any[]>([]);
   
   // Loading and refreshing states
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   
   // Chart and detail coin state
@@ -27,6 +28,11 @@ export default function CryptoMarketplacePage() {
   const [chartData, setChartData] = useState<any[]>([]);
   const [chartDays, setChartDays] = useState(7);
   const [loadingChart, setLoadingChart] = useState(false);
+
+  // Crypto wallet addresses
+  const [wallets, setWallets] = useState<any[]>([]);
+  const [selectedWalletId, setSelectedWalletId] = useState<string>("");
+  const [addressCopied, setAddressCopied] = useState(false);
 
   // Trade form state
   const [tradeType, setTradeType] = useState<"buy" | "sell">("buy");
@@ -56,19 +62,24 @@ export default function CryptoMarketplacePage() {
         setLoading(false);
       }
 
-      // Load user portfolio and accounts separately — failure here won't blank markets
+      // Load user portfolio, accounts and wallets separately — failure here won't blank markets
       try {
-        const [portfolioData, userAccounts] = await Promise.all([
+        const [portfolioData, userAccounts, userWallets] = await Promise.all([
           cryptoApi.getPortfolio(),
           accountsApi.getAccounts(),
+          walletsApi.getWallets(),
         ]);
         setPortfolio(portfolioData);
         setAccounts(userAccounts);
+        setWallets(userWallets);
         if (userAccounts && userAccounts.length > 0) {
           setSelectedAccountId(userAccounts[0].id);
         }
+        if (userWallets && userWallets.length > 0) {
+          setSelectedWalletId(userWallets[0].id);
+        }
       } catch (err) {
-        console.error("Failed to load portfolio/accounts", err);
+        console.error("Failed to load portfolio/accounts/wallets", err);
       }
     }
     initData();
@@ -144,12 +155,14 @@ export default function CryptoMarketplacePage() {
       setRefreshing(false);
     }
     try {
-      const [portfolioData, userAccounts] = await Promise.all([
+      const [portfolioData, userAccounts, userWallets] = await Promise.all([
         cryptoApi.getPortfolio(),
         accountsApi.getAccounts(),
+        walletsApi.getWallets(),
       ]);
       setPortfolio(portfolioData);
       setAccounts(userAccounts);
+      setWallets(userWallets);
     } catch {
       // Portfolio refresh failure is non-fatal; markets are already updated
     }
@@ -285,15 +298,6 @@ export default function CryptoMarketplacePage() {
     }
   }, [tradeType, selectedTradeCoin, usdAmount, coinQuantity]);
 
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-500">
-        <Loader2 className="w-8 h-8 animate-spin text-brand-primary mb-3" />
-        <p className="text-sm">Loading market indices and portfolio stats...</p>
-      </div>
-    );
-  }
-
   // Find currently selected coin details from market list
   const currentCoinMarket = markets.find((c: any) => c.id === selectedCoinId) || markets[0];
 
@@ -353,27 +357,51 @@ export default function CryptoMarketplacePage() {
           <p className="text-xs text-gray-400 mt-3">Calculated relative to weighted buy history</p>
         </div>
 
-        <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm flex flex-col justify-between">
-          <div>
-            <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Trading Account balance</p>
-            <h2 className="text-3xl font-display font-bold mt-2 text-brand-secondary">
-              ${activeBankAccountBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}
-            </h2>
-          </div>
-          <div className="mt-3 flex items-center justify-between text-xs border-t border-gray-50 pt-2.5">
-            <span className="text-gray-400">Default Funding Account</span>
-            <select
-              value={selectedAccountId}
-              onChange={(e) => setSelectedAccountId(e.target.value)}
-              className="bg-gray-50 border border-gray-200 text-gray-700 rounded-lg px-2.5 py-1 font-semibold text-xs outline-none focus:border-brand-primary"
-            >
-              {accounts.map((acc: any) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.accountName || acc.accountType.toUpperCase()} ({acc.accountNumber.slice(-4)})
-                </option>
-              ))}
-            </select>
-          </div>
+        {/* Crypto Wallet Addresses Card */}
+        <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm flex flex-col gap-3">
+          <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Crypto Deposit Addresses</p>
+          <select
+            value={selectedWalletId}
+            onChange={(e) => { setSelectedWalletId(e.target.value); setAddressCopied(false); }}
+            className="bg-gray-50 border border-gray-200 text-brand-secondary rounded-xl px-3 py-2.5 font-semibold text-xs outline-none focus:border-brand-primary"
+          >
+            {wallets.map((w: any) => (
+              <option key={w.id} value={w.id}>
+                {w.coinName} ({w.coinSymbol})
+              </option>
+            ))}
+            {wallets.length === 0 && (
+              <option disabled>Loading wallets…</option>
+            )}
+          </select>
+          {(() => {
+            const wallet = wallets.find((w: any) => w.id === selectedWalletId);
+            if (!wallet) return null;
+            return (
+              <div className="flex flex-col gap-2">
+                <div className="bg-gray-50 border border-gray-200 rounded-xl px-3 py-2.5 flex items-center justify-between gap-2">
+                  <span className="font-mono text-[11px] text-brand-secondary break-all leading-snug">
+                    {wallet.address}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(wallet.address);
+                      setAddressCopied(true);
+                      setTimeout(() => setAddressCopied(false), 2000);
+                    }}
+                    className="shrink-0 p-1.5 rounded-lg bg-brand-primary/10 hover:bg-brand-primary/20 text-brand-primary transition-all"
+                    title="Copy address"
+                  >
+                    {addressCopied ? <Check className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+                <p className="text-[10px] text-gray-400 text-center">
+                  Only send <span className="font-bold text-brand-secondary">{wallet.coinSymbol}</span> to this address. Wrong coin = permanent loss.
+                </p>
+              </div>
+            );
+          })()}
         </div>
       </div>
 
@@ -602,6 +630,21 @@ export default function CryptoMarketplacePage() {
                 </div>
                 <span className="text-xs text-gray-500 font-bold uppercase">{selectedTradeCoin?.symbol}</span>
               </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 mb-1.5">Funding Account</label>
+              <select
+                value={selectedAccountId}
+                onChange={(e) => setSelectedAccountId(e.target.value)}
+                className="w-full bg-gray-50 border border-gray-200 text-brand-secondary rounded-xl px-3 py-2.5 font-semibold text-xs outline-none focus:border-brand-primary"
+              >
+                {accounts.map((acc: any) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.accountName || acc.accountType.toUpperCase()} (···{acc.accountNumber.slice(-4)}) — ${parseFloat(acc.availableBalance).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                  </option>
+                ))}
+              </select>
             </div>
 
             {tradeType === "buy" ? (

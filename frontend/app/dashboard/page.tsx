@@ -17,7 +17,7 @@ import { motion, AnimatePresence } from "framer-motion";
 
 export default function DashboardPage() {
   const [hideBalance, setHideBalance] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
 
   const [user, setUser] = useState<any>(null);
@@ -195,15 +195,6 @@ export default function DashboardPage() {
 
     return list;
   }, [transactions, assetData.bankingTotal, assetData.investmentsTotal, assetData.cryptoTotal]);
-
-  if (loading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] text-gray-500">
-        <Loader2 className="w-8 h-8 animate-spin text-brand-primary mb-3" />
-        <p className="text-sm">Connecting to secure ledger lines...</p>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-6">
