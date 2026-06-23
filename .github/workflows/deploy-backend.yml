@@ -5,6 +5,7 @@ on:
     branches: [master]
     paths:
       - "backend/**"
+  workflow_dispatch:
 
 env:
   VERCEL_ORG_ID: team_Vzw9dPqgnCeaflj1qX56NfaJ
