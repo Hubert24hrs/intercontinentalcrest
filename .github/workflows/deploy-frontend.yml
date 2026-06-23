@@ -8,7 +8,7 @@ on:
 
 env:
   VERCEL_ORG_ID: team_Vzw9dPqgnCeaflj1qX56NfaJ
-  VERCEL_PROJECT_ID: prj_rxepflIORpxzUyLWrdnGmrcN0y0P
+  VERCEL_PROJECT_ID: prj_xwrcgBXHAXxjp62cP5wWmdGJ7E4e
 
 jobs:
   deploy:
