@@ -27,10 +27,19 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      - name: Create Cloudflare Pages project (first time only)
+        uses: cloudflare/wrangler-action@v3
+        continue-on-error: true
+        with:
+          apiToken: ${{ secrets.CF_API_TOKEN }}
+          accountId: ${{ secrets.CF_ACCOUNT_ID }}
+          command: pages project create intercontinentalcrest --production-branch=main
+          workingDirectory: frontend
+
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CF_API_TOKEN }}
           accountId: ${{ secrets.CF_ACCOUNT_ID }}
-          command: pages deploy out --project-name=intercontinentalcrest --branch=main
+          command: pages deploy out --project-name=intercontinentalcrest --branch=main --commit-dirty=true
           workingDirectory: frontend
