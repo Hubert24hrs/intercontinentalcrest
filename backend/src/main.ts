@@ -24,7 +24,8 @@ function corsOriginHandler(origin: string | undefined, callback: (err: Error | n
   if (
     ALLOWED_ORIGINS.includes(origin) ||
     /^https?:\/\/localhost(:\d+)?$/.test(origin) ||
-    /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin)
+    /^https:\/\/[a-z0-9-]+\.vercel\.app$/.test(origin) ||
+    /^https:\/\/[a-z0-9-]+\.pages\.dev$/.test(origin)
   ) {
     return callback(null, true);
   }
