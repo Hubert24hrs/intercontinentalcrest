@@ -32,7 +32,11 @@ jobs:
 
       - name: Build
         working-directory: frontend
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        run: |
+          # Remove any wrong NEXT_PUBLIC_API_URL pulled from Vercel project settings
+          sed -i '/^NEXT_PUBLIC_API_URL=/d' .env.production.local 2>/dev/null || true
+          echo "NEXT_PUBLIC_API_URL=https://intercontinentalcrest-backend.vercel.app/api" >> .env.production.local
+          vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Deploy to production
         working-directory: frontend
