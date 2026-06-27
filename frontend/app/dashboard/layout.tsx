@@ -49,11 +49,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       }
     }
 
-    // Validate the session in the background. Only show the spinner timeout
-    // for brand-new visits where we have nothing cached to display yet.
+    // Validate the session in the background.
+    // Give Vercel cold starts plenty of time before giving up (30s).
     const authTimeout = loadedFromCache
       ? null
-      : setTimeout(() => { window.location.href = "/login"; }, 8000);
+      : setTimeout(() => { window.location.href = "/login"; }, 30000);
 
     authApi.me()
       .then(res => {
@@ -62,11 +62,19 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         localStorage.setItem('cachedUser', JSON.stringify(res.user));
         setLoading(false);
       })
-      .catch(() => {
+      .catch((err: any) => {
         if (authTimeout) clearTimeout(authTimeout);
-        localStorage.removeItem('cachedUser');
-        localStorage.removeItem('accessToken');
-        window.location.href = "/login";
+        const msg: string = err?.message || '';
+        const isAuthError = msg.includes('401') || msg.toLowerCase().includes('session') || msg.toLowerCase().includes('unauthorized') || msg.toLowerCase().includes('expired');
+        if (isAuthError || !loadedFromCache) {
+          // Definite auth failure or no cached fallback — send to login
+          localStorage.removeItem('cachedUser');
+          localStorage.removeItem('accessToken');
+          window.location.href = "/login";
+        } else {
+          // Network/server hiccup but we have a cached user — stay on dashboard
+          setLoading(false);
+        }
       });
 
     return () => { if (authTimeout) clearTimeout(authTimeout); };

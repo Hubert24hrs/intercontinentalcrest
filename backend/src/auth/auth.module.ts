@@ -14,7 +14,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'supersecretjwtkey!changeme',
-      signOptions: { expiresIn: '15m' },
+      signOptions: { expiresIn: '8h' },
     }),
   ],
   controllers: [AuthController],

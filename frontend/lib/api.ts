@@ -62,7 +62,8 @@ async function request(path: string, options: RequestInit = {}) {
   }
 
   // On 401, silently refresh the access token and retry once
-  if (response.status === 401 && !path.startsWith('/auth/')) {
+  // Only skip refresh for the refresh and logout endpoints to avoid infinite loops
+  if (response.status === 401 && path !== '/auth/refresh' && path !== '/auth/logout') {
     let newToken: string | null;
 
     if (isRefreshing) {
