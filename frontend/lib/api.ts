@@ -50,7 +50,7 @@ async function request(path: string, options: RequestInit = {}) {
   } catch (netErr: any) {
     // Network failure (connection refused, offline, CORS block, browser-extension interference)
     const msg: string = netErr?.message || '';
-    if (msg === 'Failed to fetch' || msg.startsWith('Cannot read properties')) {
+    if (msg === 'Failed to fetch' || msg === 'Load failed' || msg.startsWith('Cannot read properties') || msg.startsWith('NetworkError')) {
       throw new Error('Unable to reach the server. Please check your connection and try again.');
     }
     throw new Error(msg || 'Network error. Please try again.');
