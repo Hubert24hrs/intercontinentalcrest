@@ -85,6 +85,7 @@ model CryptoOrder {
 model Account {
   id               String       @id @default(uuid())
   accountNumber    String       @unique @map("account_number")
+  accountName      String?      @map("account_name")
   userId           String       @map("user_id")
   accountType      String       @default("checking") @map("account_type") // savings, checking, business, investment
   balance          Decimal      @default(0.00)

@@ -7,6 +7,7 @@ export interface CreateInvestmentDto {
   planName: string;
   principalAmount: number;
   interestRate?: number;
+  termMonths?: number;
   startDate?: string;
   maturityDate?: string;
   accountId: string; // the source checking/savings account ID
@@ -60,6 +61,15 @@ export class InvestmentsService {
       });
 
       // Create investment record
+      const startDate = dto.startDate ? new Date(dto.startDate) : new Date();
+      let maturityDate: Date | null = null;
+      if (dto.maturityDate) {
+        maturityDate = new Date(dto.maturityDate);
+      } else if (dto.termMonths) {
+        maturityDate = new Date(startDate);
+        maturityDate.setMonth(maturityDate.getMonth() + dto.termMonths);
+      }
+
       const investment = await tx.investment.create({
         data: {
           userId,
@@ -67,8 +77,8 @@ export class InvestmentsService {
           principalAmount: principal,
           currentValue: principal,
           interestRate: dto.interestRate ? new Decimal(dto.interestRate) : null,
-          startDate: dto.startDate ? new Date(dto.startDate) : new Date(),
-          maturityDate: dto.maturityDate ? new Date(dto.maturityDate) : null,
+          startDate,
+          maturityDate,
           status: 'active',
         },
       });

@@ -172,6 +172,32 @@ export class TransactionsService {
     return transaction;
   }
 
+  async getTransactionById(userId: string, transactionId: string) {
+    const accounts = await this.prisma.account.findMany({
+      where: { userId },
+      select: { id: true },
+    });
+    const accountIds = accounts.map((a) => a.id);
+
+    const transaction = await this.prisma.transaction.findUnique({
+      where: { id: transactionId },
+      include: {
+        senderAccount: { select: { accountNumber: true, accountType: true } },
+        receiverAccount: { select: { accountNumber: true, accountType: true } },
+      },
+    });
+
+    if (!transaction) throw new NotFoundException('Transaction not found');
+
+    const belongsToUser =
+      (transaction.senderAccountId && accountIds.includes(transaction.senderAccountId)) ||
+      (transaction.receiverAccountId && accountIds.includes(transaction.receiverAccountId));
+
+    if (!belongsToUser) throw new ForbiddenException('Access denied');
+
+    return transaction;
+  }
+
   async getAllTransactions(
     page: number = 1,
     limit: number = 20,

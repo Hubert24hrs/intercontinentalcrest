@@ -510,7 +510,7 @@ export class CryptoService {
 
       return {
         order,
-        coinsSOld: dto.quantity,
+        coinsSold: dto.quantity,
         priceAtTime: pricePerCoin,
         grossUsd,
         fee,

@@ -1,4 +1,4 @@
-import { Controller, Get, Param, UseGuards, Req, Res, Query } from '@nestjs/common';
+import { Controller, Get, Patch, Body, Param, UseGuards, Req, Res, Query } from '@nestjs/common';
 import { AccountsService } from './accounts.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { Response } from 'express';
@@ -46,6 +46,15 @@ export class AccountsController {
     });
 
     res.end(pdfBuffer);
+  }
+
+  @Patch(':id')
+  async updateAccount(
+    @Param('id') id: string,
+    @Req() req: any,
+    @Body() body: { accountName?: string },
+  ) {
+    return this.accountsService.updateAccount(id, req.user.id, body);
   }
 
   @Get(':id')

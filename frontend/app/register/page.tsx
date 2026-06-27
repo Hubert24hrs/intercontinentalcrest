@@ -84,17 +84,17 @@ export default function RegisterPage() {
           phone: form.phone,
           ...(form.dob ? { dateOfBirth: form.dob } : {}),
         });
-
-        // Auto-login after successful registration
-        await authApi.login({
-          email: form.email,
-          password: form.password,
-        });
-
-        window.location.href = "/dashboard";
       } catch (err: any) {
         setErrorMsg(err.message || "Registration failed. Please check your inputs.");
-      } finally {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        await authApi.login({ email: form.email, password: form.password });
+        window.location.href = "/dashboard";
+      } catch {
+        setErrorMsg("Account created! Please sign in to continue.");
         setLoading(false);
       }
     }

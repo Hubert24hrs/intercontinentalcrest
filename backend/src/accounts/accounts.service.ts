@@ -23,6 +23,14 @@ export class AccountsService {
     return account;
   }
 
+  async updateAccount(accountId: string, userId: string, data: { accountName?: string }) {
+    const account = await this.getAccountById(accountId, userId);
+    return this.prisma.account.update({
+      where: { id: account.id },
+      data: { accountName: data.accountName },
+    });
+  }
+
   async getAllAccounts(page: number = 1, limit: number = 20) {
     const skip = (page - 1) * limit;
     const [accounts, total] = await Promise.all([

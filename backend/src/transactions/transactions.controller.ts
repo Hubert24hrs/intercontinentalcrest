@@ -33,6 +33,11 @@ export class TransactionsController {
     );
   }
 
+  @Get(':id')
+  async getTransactionById(@Req() req: any, @Param('id') id: string) {
+    return this.transactionsService.getTransactionById(req.user.id, id);
+  }
+
   @Post('transfer')
   async transfer(@Req() req: any, @Body() dto: any) {
     return this.transactionsService.transfer(req.user.id, dto);
