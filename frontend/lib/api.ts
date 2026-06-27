@@ -11,15 +11,22 @@ function drainRefreshQueue(token: string | null) {
 
 async function doTokenRefresh(): Promise<string | null> {
   try {
+    // Send the stored refresh token in the body as a fallback for iOS Safari,
+    // which blocks cross-site HTTP-only cookies (ITP). Cookies are also sent
+    // via credentials:'include' for browsers that support them.
+    const storedRefreshToken = typeof window !== 'undefined' ? localStorage.getItem('refreshToken') : null;
     const res = await fetch(`${API_BASE}/auth/refresh`, {
       method: 'POST',
       credentials: 'include',
+      headers: storedRefreshToken ? { 'Content-Type': 'application/json' } : undefined,
+      body: storedRefreshToken ? JSON.stringify({ refreshToken: storedRefreshToken }) : undefined,
     });
     if (!res.ok) return null;
     const data = await res.json().catch(() => null);
     const newToken = data?.accessToken ?? null;
     if (newToken && typeof window !== 'undefined') {
       localStorage.setItem('accessToken', newToken);
+      if (data?.refreshToken) localStorage.setItem('refreshToken', data.refreshToken);
     }
     return newToken;
   } catch {
@@ -104,8 +111,12 @@ async function request(path: string, options: RequestInit = {}) {
     if (resData && resData.accessToken) {
       localStorage.setItem('accessToken', resData.accessToken);
     }
+    if (resData && resData.refreshToken) {
+      localStorage.setItem('refreshToken', resData.refreshToken);
+    }
     if (path.startsWith('/auth/logout')) {
       localStorage.removeItem('accessToken');
+      localStorage.removeItem('refreshToken');
     }
   }
 

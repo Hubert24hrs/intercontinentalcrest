@@ -47,7 +47,7 @@ export class AuthController {
     if (result.require2Fa) return result;
 
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
-    return { user: result.user, accessToken: result.accessToken };
+    return { user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken };
   }
 
   @Post('2fa/generate')
@@ -72,7 +72,7 @@ export class AuthController {
   ) {
     const result = await this.authService.authenticate2Fa(tempToken, code) as any;
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
-    return { user: result.user, accessToken: result.accessToken };
+    return { user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken };
   }
 
   @Post('2fa/disable')
@@ -88,13 +88,14 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const refreshToken = (req as any).cookies?.['refreshToken'];
+    // Accept refresh token from cookie (standard browsers) or request body (iOS Safari — ITP blocks cross-site cookies)
+    const refreshToken = (req as any).cookies?.['refreshToken'] || (req as any).body?.refreshToken;
     if (!refreshToken) {
       return res.status(401).json({ message: 'No refresh token' });
     }
     const result = await this.authService.refreshAccessToken(refreshToken) as any;
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
-    return { accessToken: result.accessToken };
+    return { accessToken: result.accessToken, refreshToken: result.refreshToken };
   }
 
   @Post('logout')
