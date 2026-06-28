@@ -88,6 +88,8 @@ async function request(path: string, options: RequestInit = {}) {
     if (!newToken) {
       if (typeof window !== 'undefined') {
         localStorage.removeItem('accessToken');
+        localStorage.removeItem('refreshToken');
+        localStorage.removeItem('cachedUser');
         window.location.href = '/login';
       }
       throw new Error('Session expired. Please log in again.');

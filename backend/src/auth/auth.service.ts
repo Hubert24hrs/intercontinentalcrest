@@ -73,10 +73,10 @@ export class AuthService {
   }
 
   async generateTokens(user: any) {
-    const payload = { sub: user.id, email: user.email, role: user.role };
+    const payload = { sub: user.id, email: user.email, role: user.role, fullName: user.fullName };
 
     const accessToken = this.jwtService.sign(payload, { expiresIn: '8h' });
-    const refreshToken = this.jwtService.sign({ sub: user.id }, { expiresIn: '30d' });
+    const refreshToken = this.jwtService.sign(payload, { expiresIn: '30d' });
 
     return {
       accessToken,
@@ -93,14 +93,34 @@ export class AuthService {
   }
 
   async refreshAccessToken(refreshToken: string) {
+    let payload: any;
     try {
-      const payload = this.jwtService.verify(refreshToken);
-      const user = await this.usersService.findOneById(payload.sub);
-      if (!user) throw new UnauthorizedException();
-      return this.generateTokens(user);
+      payload = this.jwtService.verify(refreshToken);
     } catch {
       throw new UnauthorizedException('Refresh token is invalid or expired');
     }
+
+    if (!payload?.sub) throw new UnauthorizedException('Refresh token is invalid or expired');
+
+    // Try DB for fresh user data; fall back to payload on cold-start DB miss
+    // (Vercel spins up fresh SQLite instances that may not have recently-registered users)
+    const user = await this.usersService.findOneById(payload.sub).catch(() => null);
+    if (user) return this.generateTokens(user);
+
+    if (!payload.email || !payload.role) {
+      throw new UnauthorizedException('Session expired. Please log in again.');
+    }
+
+    const newPayload = { sub: payload.sub, email: payload.email, role: payload.role, fullName: payload.fullName };
+    return {
+      accessToken: this.jwtService.sign(newPayload, { expiresIn: '8h' }),
+      refreshToken: this.jwtService.sign(newPayload, { expiresIn: '30d' }),
+      user: { id: payload.sub, email: payload.email, role: payload.role, fullName: payload.fullName },
+    };
+  }
+
+  async getUserById(id: string) {
+    return this.usersService.findOneById(id).catch(() => null);
   }
 
   async generate2FaSecret(userId: string) {

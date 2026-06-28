@@ -1,4 +1,4 @@
-import { Controller, Post, Patch, Body, Res, Req, UseGuards, Get, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
+import { Controller, Post, Patch, Body, Res, Req, UseGuards, Get, HttpCode, HttpStatus, BadRequestException, UnauthorizedException } from '@nestjs/common';
 import { Response, Request } from 'express';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
@@ -91,7 +91,7 @@ export class AuthController {
     // Accept refresh token from cookie (standard browsers) or request body (iOS Safari — ITP blocks cross-site cookies)
     const refreshToken = (req as any).cookies?.['refreshToken'] || (req as any).body?.refreshToken;
     if (!refreshToken) {
-      return res.status(401).json({ message: 'No refresh token' });
+      throw new UnauthorizedException('No refresh token');
     }
     const result = await this.authService.refreshAccessToken(refreshToken) as any;
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
@@ -110,6 +110,21 @@ export class AuthController {
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async me(@Req() req: any) {
+    // Try to return fresh user data (includes twoFactorEnabled, phone, etc.)
+    // Falls back to JWT payload if DB is unavailable (different Vercel cold-start instance)
+    const freshUser = await this.authService.getUserById(req.user.id);
+    if (freshUser) {
+      return {
+        user: {
+          id: freshUser.id,
+          fullName: freshUser.fullName,
+          email: freshUser.email,
+          role: freshUser.role,
+          phone: freshUser.phone,
+          twoFactorEnabled: freshUser.twoFactorEnabled,
+        },
+      };
+    }
     return { user: req.user };
   }
 
