@@ -12,9 +12,14 @@ import { NotificationsModule } from '../notifications/notifications.module';
     UsersModule,
     NotificationsModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
-    JwtModule.register({
-      secret: process.env.JWT_SECRET || 'supersecretjwtkey!changeme',
-      signOptions: { expiresIn: '8h' },
+    // Use registerAsync so JWT_SECRET is read at request-handler time,
+    // not at module-load time. On Vercel, env vars are available at runtime
+    // but may not yet be populated when the module is first imported.
+    JwtModule.registerAsync({
+      useFactory: () => ({
+        secret: process.env.JWT_SECRET,
+        signOptions: { expiresIn: '8h' },
+      }),
     }),
   ],
   controllers: [AuthController],

@@ -228,8 +228,14 @@ export const accountsApi = {
 
   downloadStatementPdf: async (accountId: string, year: number, month: number) => {
     const url = `${API_BASE}/accounts/${accountId}/statement/pdf?year=${year}&month=${month}`;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     const response = await fetch(url, {
       credentials: 'include',
+      headers,
     });
     if (!response.ok) {
       throw new Error('Failed to download PDF statement');

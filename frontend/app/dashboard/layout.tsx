@@ -148,6 +148,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
     localStorage.removeItem('cachedUser');
     localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
     window.location.href = "/login";
   };
 

@@ -1,14 +1,11 @@
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
 generator client {
-  provider      = "prisma-client-js"
-  binaryTargets = ["native", "rhel-openssl-1.0.x", "rhel-openssl-3.0.x"]
+  provider = "prisma-client-js"
 }
-
-// Enums are represented as Strings in SQLite
 
 model User {
   id                   String        @id @default(uuid())
@@ -114,7 +111,7 @@ model Transaction {
   status               String            @default("pending") // pending, completed, failed, reversed
   type                 String
   description          String?
-  metadata             String?           // Stored as serialized JSON string in SQLite
+  metadata             String?           // JSON string (serialized for cross-DB compat)
   ipAddress            String?           @map("ip_address")
   createdAt            DateTime          @default(now()) @map("created_at")
   updatedAt            DateTime          @updatedAt @map("updated_at")
@@ -233,8 +230,8 @@ model AuditLog {
   action     String
   entityType String?  @map("entity_type")
   entityId   String?  @map("entity_id")
-  oldValues  String?  @map("old_values")   // Stored as serialized JSON string in SQLite
-  newValues  String?  @map("new_values")   // Stored as serialized JSON string in SQLite
+  oldValues  String?  @map("old_values")   // JSON string (serialized for cross-DB compat)
+  newValues  String?  @map("new_values")   // JSON string (serialized for cross-DB compat)
   ipAddress  String?  @map("ip_address")
   userAgent  String?  @map("user_agent")
   createdAt  DateTime @default(now()) @map("created_at")

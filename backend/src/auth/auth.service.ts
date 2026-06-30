@@ -50,14 +50,17 @@ export class AuthService {
   async validateUser(loginDto: LoginDto) {
     const user = await this.usersService.findOneByEmail(loginDto.email);
     if (!user) {
+      console.warn(`[Auth] Login failed — user not found: ${loginDto.email}`);
       throw new UnauthorizedException('Invalid email or password');
     }
 
     const matches = await bcrypt.compare(loginDto.password, user.passwordHash);
     if (!matches) {
+      console.warn(`[Auth] Login failed — password mismatch for: ${loginDto.email}`);
       throw new UnauthorizedException('Invalid email or password');
     }
 
+    console.log(`[Auth] Login successful for: ${loginDto.email}`);
     return user;
   }
 
@@ -102,25 +105,19 @@ export class AuthService {
 
     if (!payload?.sub) throw new UnauthorizedException('Refresh token is invalid or expired');
 
-    // Try DB for fresh user data; fall back to payload on cold-start DB miss
-    // (Vercel spins up fresh SQLite instances that may not have recently-registered users)
-    const user = await this.usersService.findOneById(payload.sub).catch(() => null);
-    if (user) return this.generateTokens(user);
-
-    if (!payload.email || !payload.role) {
+    // Always look up the user from the database to ensure the session is still valid.
+    // This correctly rejects tokens for deleted or suspended users.
+    const user = await this.usersService.findOneById(payload.sub);
+    if (!user) {
+      console.warn(`[Auth] Token refresh rejected — user not found: ${payload.sub}`);
       throw new UnauthorizedException('Session expired. Please log in again.');
     }
 
-    const newPayload = { sub: payload.sub, email: payload.email, role: payload.role, fullName: payload.fullName };
-    return {
-      accessToken: this.jwtService.sign(newPayload, { expiresIn: '8h' }),
-      refreshToken: this.jwtService.sign(newPayload, { expiresIn: '30d' }),
-      user: { id: payload.sub, email: payload.email, role: payload.role, fullName: payload.fullName },
-    };
+    return this.generateTokens(user);
   }
 
   async getUserById(id: string) {
-    return this.usersService.findOneById(id).catch(() => null);
+    return this.usersService.findOneById(id);
   }
 
   async generate2FaSecret(userId: string) {

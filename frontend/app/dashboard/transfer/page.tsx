@@ -61,18 +61,26 @@ export default function TransferPage() {
   const [success, setSuccess] = useState<any>(null);
   const [sentAmount, setSentAmount] = useState(0);
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
 
-  useEffect(() => {
-    Promise.allSettled([
+  const loadData = () => {
+    setDataLoading(true);
+    setLoadError("");
+    Promise.all([
       accountsApi.getAccounts(),
       beneficiariesApi.getBeneficiaries(),
-    ]).then(([accRes, benRes]) => {
-      const accs = accRes.status === "fulfilled" ? accRes.value || [] : [];
-      const bens = benRes.status === "fulfilled" ? benRes.value || [] : [];
-      setAccounts(accs);
-      setBeneficiaries(bens);
-      if (accs.length > 0) setSenderAccountId(accs[0].id);
+    ]).then(([accs, bens]) => {
+      setAccounts(accs || []);
+      setBeneficiaries(bens || []);
+      if (accs && accs.length > 0) setSenderAccountId(accs[0].id);
+    }).catch((err: any) => {
+      console.error("Failed to load transfer data:", err);
+      setLoadError(err.message || "Unable to retrieve accounts. Please check your connection and try again.");
     }).finally(() => setDataLoading(false));
+  };
+
+  useEffect(() => {
+    loadData();
   }, []);
 
   const senderAccount = accounts.find(a => a.id === senderAccountId);
@@ -130,6 +138,24 @@ export default function TransferPage() {
           <Loader2 className="w-4 h-4 animate-spin text-brand-primary" />
           Connecting to secure ledger lines...
         </div>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="max-w-lg mx-auto text-center py-20 space-y-4">
+        <div className="w-16 h-16 rounded-2xl bg-red-100 flex items-center justify-center mx-auto mb-5">
+          <AlertTriangle className="w-8 h-8 text-red-600" />
+        </div>
+        <h2 className="font-display font-bold text-brand-secondary text-xl">Failed to Load Accounts</h2>
+        <p className="text-gray-500 text-sm">{loadError}</p>
+        <button
+          onClick={loadData}
+          className="btn-primary mx-auto"
+        >
+          Try Again
+        </button>
       </div>
     );
   }
