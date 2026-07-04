@@ -5,7 +5,12 @@
       "src": "api/index.ts",
       "use": "@vercel/node",
       "config": {
-        "maxDuration": 30
+        "maxDuration": 30,
+        "includeFiles": [
+          "prisma/schema.prisma",
+          "node_modules/.prisma/client/**",
+          "node_modules/@prisma/client/**"
+        ]
       }
     }
   ],

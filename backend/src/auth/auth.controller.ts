@@ -158,7 +158,7 @@ export class AuthController {
   }
 
   private setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
-    const isProd = process.env.NODE_ENV === 'production';
+    const isProd = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
     res.cookie('accessToken', accessToken, {
       httpOnly: true,
       secure: isProd,

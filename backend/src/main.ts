@@ -2,6 +2,8 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import cookieParser = require('cookie-parser');
 import { AppModule } from './app.module';
+import { PrismaService } from './prisma/prisma.service';
+import * as bcrypt from 'bcrypt';
 
 let cachedServer: any;
 
@@ -26,6 +28,27 @@ function corsOriginHandler(origin: string | undefined, callback: (err: Error | n
   }
 
   callback(null, false);
+}
+
+/**
+ * Ensure the super_admin account exists with the latest credentials from env vars.
+ * Runs once per cold start using the singleton PrismaService to avoid connection leaks.
+ */
+async function syncAdminCredentials(prisma: PrismaService) {
+  const adminEmail = process.env.ADMIN_EMAIL;
+  const adminPassword = process.env.ADMIN_PASSWORD;
+  if (!adminEmail || !adminPassword) return;
+
+  try {
+    const hash = await bcrypt.hash(adminPassword, 12);
+    const existing = await prisma.user.findFirst({ where: { role: 'super_admin' } });
+    if (existing) {
+      await prisma.user.update({ where: { id: existing.id }, data: { email: adminEmail, passwordHash: hash } });
+      console.log(`[Admin] Credentials synced → ${adminEmail}`);
+    }
+  } catch (e: any) {
+    console.error('[Admin] Failed to sync credentials:', e?.message);
+  }
 }
 
 export async function bootstrapExpress(): Promise<any> {
@@ -53,6 +76,10 @@ export async function bootstrapExpress(): Promise<any> {
       forbidNonWhitelisted: true,
     }),
   );
+
+  // Sync admin credentials on cold start using the singleton PrismaService
+  const prisma = app.get(PrismaService);
+  await syncAdminCredentials(prisma);
 
   await app.init();
   cachedServer = app.getHttpAdapter().getInstance();
@@ -89,3 +116,4 @@ async function bootstrap() {
 if (!process.env.VERCEL) {
   bootstrap();
 }
+

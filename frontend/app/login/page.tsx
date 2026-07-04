@@ -28,7 +28,10 @@ export default function LoginPage() {
   // Warm up the backend while the user is filling in the form so the
   // cold-start penalty is paid before — not after — they click Sign In.
   useEffect(() => {
-    fetch(`${API_BASE}/auth/me`, { credentials: 'include' }).catch(() => {});
+    const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+    const headers: Record<string, string> = {};
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    fetch(`${API_BASE}/auth/me`, { credentials: 'include', headers }).catch(() => {});
   }, []);
 
   const handleLogin = async (e: React.FormEvent) => {

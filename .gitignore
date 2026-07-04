@@ -17,6 +17,9 @@ node_modules/
 .next/
 /out/
 
+# frontend build output
+frontend/out/
+
 # production
 /build
 dist/
@@ -45,9 +48,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# database — keep dev.db in git so Vercel cold-starts can copy it to /tmp
-# *.db
-# *.db-journal
+# database — SQLite dev.db removed; app now uses Neon Postgres
+*.db
+*.db-journal
 *.db-shm
 *.db-wal
 

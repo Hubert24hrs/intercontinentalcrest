@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Loader2 } from "lucide-react";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000/api";
+import { cryptoApi } from "@/lib/api";
 
 const ICONS: Record<string, { icon: string; color: string }> = {
   bitcoin:  { icon: "🪙", color: "text-amber-500" },
@@ -18,9 +18,7 @@ export default function LiveCryptoPrices() {
   useEffect(() => {
     async function fetchPrices() {
       try {
-        const res = await fetch(`${API_BASE}/crypto/markets`, { credentials: "include" });
-        if (!res.ok) throw new Error("fetch failed");
-        const data = await res.json();
+        const data = await cryptoApi.getMarkets();
         const top3 = (data as any[]).filter(c =>
           ["bitcoin", "ethereum", "solana"].includes(c.id)
         ).slice(0, 3);

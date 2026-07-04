@@ -68,7 +68,9 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=4000
+      # Local dev Postgres (docker-compose) — Vercel production uses Neon (set in Vercel dashboard)
       - DATABASE_URL=postgresql://${POSTGRES_USER:-icadmin}:${POSTGRES_PASSWORD:-icpassword123!}@postgres:5432/${POSTGRES_DB:-intercontinental_crest}
+      - DIRECT_URL=postgresql://${POSTGRES_USER:-icadmin}:${POSTGRES_PASSWORD:-icpassword123!}@postgres:5432/${POSTGRES_DB:-intercontinental_crest}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-redispass123}@redis:6379
       - JWT_SECRET=${JWT_SECRET:-supersecretjwtkey!changeme}
       - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-refreshsecret!changeme}
