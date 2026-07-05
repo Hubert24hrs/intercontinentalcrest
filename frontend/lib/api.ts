@@ -69,8 +69,17 @@ async function request(path: string, options: RequestInit = {}) {
   }
 
   // On 401, silently refresh the access token and retry once
-  // Only skip refresh for the refresh and logout endpoints to avoid infinite loops
-  if (response.status === 401 && path !== '/auth/refresh' && path !== '/auth/logout') {
+  // Only skip refresh for public/auth endpoints to avoid infinite loops and false-positive session expired messages
+  const skipRefreshPaths = [
+    '/auth/login',
+    '/auth/register',
+    '/auth/refresh',
+    '/auth/logout',
+    '/auth/2fa/authenticate',
+    '/auth/forgot-password',
+    '/auth/reset-password'
+  ];
+  if (response.status === 401 && !skipRefreshPaths.includes(path)) {
     let newToken: string | null;
 
     if (isRefreshing) {

@@ -45,11 +45,25 @@ async function syncAdminCredentials(prisma: PrismaService) {
     if (existing) {
       await prisma.user.update({ where: { id: existing.id }, data: { email: adminEmail, passwordHash: hash } });
       console.log(`[Admin] Credentials synced → ${adminEmail}`);
+    } else {
+      // No admin exists yet (seed may not have run) — create one now
+      await prisma.user.create({
+        data: {
+          fullName: 'Super Admin',
+          email: adminEmail,
+          passwordHash: hash,
+          role: 'super_admin',
+          status: 'active',
+          emailVerified: true,
+        },
+      });
+      console.log(`[Admin] Account created → ${adminEmail}`);
     }
   } catch (e: any) {
     console.error('[Admin] Failed to sync credentials:', e?.message);
   }
 }
+
 
 export async function bootstrapExpress(): Promise<any> {
   if (cachedServer) {
