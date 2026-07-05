@@ -15,7 +15,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "ts-node -r tsconfig-paths/register prisma/seed.ts",
-    "vercel-build": "node migrate-verbose.js",
+    "vercel-build": "prisma generate && prisma migrate deploy",
     "migrate:deploy": "prisma migrate deploy"
   },
   "dependencies": {
