@@ -2,7 +2,6 @@ import type { NextConfig } from "next";
 import path from "path";
 
 const nextConfig: NextConfig = {
-  output: 'export',
   env: {
     NEXT_PUBLIC_API_URL: 'https://intercontinentalcrest-backend.vercel.app/api',
   },

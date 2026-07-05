@@ -1,5 +1,5 @@
-﻿import { chromium } from "@playwright/test";
-const BASE = "http://localhost:3000";
+import { chromium } from "@playwright/test";
+const BASE = process.env.BASE_URL || "http://localhost:3000";
 const results = [];
 
 async function test(label, fn) {
