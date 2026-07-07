@@ -22,7 +22,7 @@ export class AuthService {
 
     const user = await this.usersService.create({
       fullName: registerDto.fullName,
-      email: registerDto.email,
+      email: registerDto.email.trim().toLowerCase(),
       phone: registerDto.phone,
       passwordHash,
     });
@@ -48,19 +48,28 @@ export class AuthService {
   }
 
   async validateUser(loginDto: LoginDto) {
-    const user = await this.usersService.findOneByEmail(loginDto.email);
+    // Normalise the submitted email — strip surrounding whitespace and lowercase
+    // so the lookup is consistent regardless of what the client sends.
+    const normalizedEmail = loginDto.email.trim().toLowerCase();
+
+    const user = await this.usersService.findOneByEmail(normalizedEmail);
     if (!user) {
-      console.warn(`[Auth] Login failed — user not found: ${loginDto.email}`);
+      console.warn(`[Auth] Login failed — user not found: ${normalizedEmail}`);
       throw new UnauthorizedException('Invalid email or password');
+    }
+
+    if (user.status !== 'active') {
+      console.warn(`[Auth] Login blocked — account status=${user.status} for: ${normalizedEmail}`);
+      throw new UnauthorizedException('Your account is not active. Please contact support.');
     }
 
     const matches = await bcrypt.compare(loginDto.password, user.passwordHash);
     if (!matches) {
-      console.warn(`[Auth] Login failed — password mismatch for: ${loginDto.email}`);
+      console.warn(`[Auth] Login failed — password mismatch for: ${normalizedEmail} (role=${user.role})`);
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    console.log(`[Auth] Login successful for: ${loginDto.email}`);
+    console.log(`[Auth] Login successful for: ${normalizedEmail} (role=${user.role})`);
     return user;
   }
 

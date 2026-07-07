@@ -35,8 +35,10 @@ function corsOriginHandler(origin: string | undefined, callback: (err: Error | n
  * Runs once per cold start using the singleton PrismaService to avoid connection leaks.
  */
 async function syncAdminCredentials(prisma: PrismaService) {
-  const adminEmail = process.env.ADMIN_EMAIL;
-  const adminPassword = process.env.ADMIN_PASSWORD;
+  // Trim to strip any hidden \r\n that Vercel's env var storage can embed,
+  // especially when the value was set via the CLI or copied from Windows.
+  const adminEmail    = (process.env.ADMIN_EMAIL    || '').trim().toLowerCase();
+  const adminPassword = (process.env.ADMIN_PASSWORD || '').trim();
   if (!adminEmail || !adminPassword) return;
 
   try {

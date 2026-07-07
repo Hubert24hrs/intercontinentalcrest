@@ -13,8 +13,9 @@ async function main() {
   // ── Admin user ────────────────────────────────────────────────────────────
   // Credentials are read from environment variables — never hardcoded.
   // Set ADMIN_EMAIL and ADMIN_PASSWORD in your deployment environment before running the seed.
-  const adminEmail = process.env.ADMIN_EMAIL;
-  const adminPassword = process.env.ADMIN_PASSWORD;
+  // Trim to strip any hidden \r\n that Vercel's env var storage can embed
+  const adminEmail    = (process.env.ADMIN_EMAIL    || '').trim() || undefined;
+  const adminPassword = (process.env.ADMIN_PASSWORD || '').trim() || undefined;
 
   if (!adminEmail || !adminPassword) {
     console.warn('ADMIN_EMAIL or ADMIN_PASSWORD env var not set — skipping admin upsert.');

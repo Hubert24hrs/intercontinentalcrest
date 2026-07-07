@@ -9,8 +9,9 @@ const require = createRequire(import.meta.url);
 const { PrismaClient } = require('@prisma/client');
 const bcrypt = require('bcrypt');
 
-const ADMIN_EMAIL    = process.env.ADMIN_EMAIL;
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
+// Trim to strip any hidden \r\n that Vercel's env var storage can embed
+const ADMIN_EMAIL    = (process.env.ADMIN_EMAIL    || '').trim();
+const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || '').trim();
 
 if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
   console.warn('[setup-admin] ADMIN_EMAIL or ADMIN_PASSWORD not set — skipping admin upsert.');
@@ -18,7 +19,7 @@ if (!ADMIN_EMAIL || !ADMIN_PASSWORD) {
 }
 
 // Use DIRECT_URL for migrations/seeding (bypasses PgBouncer prepared statement restrictions)
-const dbUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
+const dbUrl = (process.env.DIRECT_URL || process.env.DATABASE_URL || '').trim();
 if (!dbUrl) {
   console.warn('[setup-admin] No DATABASE_URL — skipping admin upsert.');
   process.exit(0);
