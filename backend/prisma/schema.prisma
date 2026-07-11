@@ -28,18 +28,19 @@ model User {
   createdAt            DateTime      @default(now()) @map("created_at")
   updatedAt            DateTime      @updatedAt @map("updated_at")
   
-  accounts             Account[]
-  beneficiaries        Beneficiary[]
-  kycDocuments         KycDocument[] @relation("KycDocuments")
-  reviewedKycDocuments KycDocument[] @relation("KycReviewer")
-  loans                Loan[]        @relation("LoanCustomer")
-  approvedLoans        Loan[]        @relation("LoanApprover")
-  investments          Investment[]
-  notifications        Notification[]
-  auditLogs            AuditLog[]
-  cryptoHoldings       CryptoHolding[]
-  cryptoOrders         CryptoOrder[]
-  cryptoWallets        CryptoWallet[]
+  accounts                  Account[]
+  beneficiaries             Beneficiary[]
+  kycDocuments              KycDocument[]  @relation("KycDocuments")
+  reviewedKycDocuments      KycDocument[]  @relation("KycReviewer")
+  loans                     Loan[]         @relation("LoanCustomer")
+  approvedLoans             Loan[]         @relation("LoanApprover")
+  investments               Investment[]
+  notifications             Notification[]
+  auditLogs                 AuditLog[]
+  cryptoHoldings            CryptoHolding[]
+  cryptoOrders              CryptoOrder[]
+  cryptoWallets             CryptoWallet[]
+  performedTransactions     Transaction[]  @relation("AdminTransactions")
 
   @@map("users")
 }
@@ -112,6 +113,9 @@ model Transaction {
   status               String            @default("pending") // pending, completed, failed, reversed
   type                 String
   description          String?
+  reason               String?           // Admin-supplied reason for manual adjustments
+  adminReference       String?           @map("admin_reference") // Optional internal ticket/reference
+  performedByAdminId   String?           @map("performed_by_admin_id") // Set for admin-initiated transactions
   metadata             String?           // JSON string (serialized for cross-DB compat)
   ipAddress            String?           @map("ip_address")
   createdAt            DateTime          @default(now()) @map("created_at")
@@ -119,6 +123,7 @@ model Transaction {
 
   senderAccount        Account?          @relation("SenderAccount", fields: [senderAccountId], references: [id])
   receiverAccount      Account?          @relation("ReceiverAccount", fields: [receiverAccountId], references: [id])
+  performedByAdmin     User?             @relation("AdminTransactions", fields: [performedByAdminId], references: [id])
 
   @@map("transactions")
 }

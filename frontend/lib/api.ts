@@ -574,6 +574,22 @@ export const adminApi = {
   deleteUser: (userId: string) => {
     return request(`/admin/users/${userId}`, { method: 'DELETE' });
   },
+
+  adjustBalance: (
+    customerId: string,
+    data: {
+      type: 'credit' | 'debit';
+      amount: number;
+      accountId: string;
+      reason: string;
+      reference?: string;
+    },
+  ) => {
+    return request(`/admin/customers/${customerId}/adjust-balance`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
 };
 
 export const walletsApi = {

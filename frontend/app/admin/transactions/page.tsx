@@ -132,6 +132,7 @@ export default function AdminTransactionsPage() {
                   <th className="py-3 pr-4">Transaction Ref</th>
                   <th className="py-3 pr-4">Sender Account</th>
                   <th className="py-3 pr-4">Receiver Account</th>
+                  <th className="py-3 pr-4">Type</th>
                   <th className="py-3 pr-4 hidden md:table-cell">Date</th>
                   <th className="py-3 pr-4">Status</th>
                   <th className="py-3 text-right">Amount</th>
@@ -140,9 +141,40 @@ export default function AdminTransactionsPage() {
               <tbody className="divide-y divide-gray-50 text-xs">
                 {filtered.map((tx) => {
                   const date = new Date(tx.createdAt);
+                  
+                  // Label transaction types nicely
+                  let typeLabel = tx.type;
+                  let typeClass = "bg-gray-100 text-gray-700";
+                  
+                  if (tx.type === "admin_credit") {
+                    typeLabel = "Admin Credit";
+                    typeClass = "bg-purple-50 text-purple-700 border border-purple-200";
+                  } else if (tx.type === "admin_debit") {
+                    typeLabel = "Admin Debit";
+                    typeClass = "bg-indigo-50 text-indigo-700 border border-indigo-200";
+                  } else if (tx.type === "loan_disbursement") {
+                    typeLabel = "Loan Disb";
+                    typeClass = "bg-pink-50 text-pink-700 border border-pink-200";
+                  } else if (tx.type === "transfer") {
+                    typeLabel = "Transfer";
+                    typeClass = "bg-blue-50 text-blue-700 border border-blue-200";
+                  } else if (tx.type === "investment") {
+                    typeLabel = "Investment";
+                    typeClass = "bg-amber-50 text-amber-700 border border-amber-200";
+                  } else if (tx.type === "credit") {
+                    typeLabel = "Deposit/Credit";
+                    typeClass = "bg-teal-50 text-teal-700 border border-teal-200";
+                  } else if (tx.type === "debit") {
+                    typeLabel = "Withdrawal/Debit";
+                    typeClass = "bg-orange-50 text-orange-700 border border-orange-200";
+                  }
+
                   return (
                     <tr key={tx.id} className="hover:bg-gray-50/50 transition-colors text-gray-700">
-                      <td className="py-3.5 pr-4 font-mono font-bold text-brand-secondary">{tx.transactionReference}</td>
+                      <td className="py-3.5 pr-4 font-mono font-bold text-brand-secondary">
+                        <div>{tx.transactionReference}</div>
+                        {tx.description && <div className="text-[10px] text-gray-400 font-normal mt-0.5">{tx.description}</div>}
+                      </td>
                       <td className="py-3.5 pr-4">
                         {tx.senderAccount ? (
                           <>
@@ -150,7 +182,7 @@ export default function AdminTransactionsPage() {
                             <div className="text-[10px] text-gray-400 font-mono">{tx.senderAccount.accountNumber} ({tx.senderAccount.accountType.toUpperCase()})</div>
                           </>
                         ) : (
-                          <span className="text-gray-400 font-semibold italic">External Account</span>
+                          <span className="text-gray-400 font-semibold italic">External/System</span>
                         )}
                       </td>
                       <td className="py-3.5 pr-4">
@@ -160,8 +192,13 @@ export default function AdminTransactionsPage() {
                             <div className="text-[10px] text-gray-400 font-mono">{tx.receiverAccount.accountNumber} ({tx.receiverAccount.accountType.toUpperCase()})</div>
                           </>
                         ) : (
-                          <span className="text-gray-400 font-semibold italic">External Account</span>
+                          <span className="text-gray-400 font-semibold italic">External/System</span>
                         )}
+                      </td>
+                      <td className="py-3.5 pr-4">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${typeClass}`}>
+                          {typeLabel}
+                        </span>
                       </td>
                       <td className="py-3.5 pr-4 text-gray-500 font-mono hidden md:table-cell">{date.toLocaleString()}</td>
                       <td className="py-3.5 pr-4">
@@ -175,7 +212,7 @@ export default function AdminTransactionsPage() {
                 })}
                 {filtered.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="py-12 text-center text-gray-400">No wire transaction logs match selected filters.</td>
+                    <td colSpan={7} className="py-12 text-center text-gray-400">No wire transaction logs match selected filters.</td>
                   </tr>
                 )}
               </tbody>

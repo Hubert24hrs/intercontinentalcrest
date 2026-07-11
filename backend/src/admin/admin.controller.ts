@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { AdjustBalanceDto } from './dto/adjust-balance.dto';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard)
@@ -140,5 +141,25 @@ export class AdminController {
   ) {
     this.checkAdmin(req);
     return this.adminService.getAuditLogs(parseInt(page, 10), parseInt(limit, 10));
+  }
+
+  @Post('customers/:customerId/adjust-balance')
+  async adjustBalance(
+    @Param('customerId') customerId: string,
+    @Body() dto: AdjustBalanceDto,
+    @Req() req: any,
+  ) {
+    this.checkAdmin(req);
+    const ipAddress: string | undefined =
+      req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+      req.ip ||
+      undefined;
+    return this.adminService.adjustBalance(
+      customerId,
+      dto,
+      req.user.id,
+      req.user.email,
+      ipAddress,
+    );
   }
 }

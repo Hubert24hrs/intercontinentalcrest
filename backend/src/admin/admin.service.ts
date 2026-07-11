@@ -1,6 +1,9 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Decimal } from '@prisma/client/runtime/library';
+import { AdjustBalanceDto } from './dto/adjust-balance.dto';
+
+const MAX_SINGLE_ADJUSTMENT = 500_000;
 
 @Injectable()
 export class AdminService {
@@ -429,6 +432,156 @@ export class AdminService {
       page,
       limit,
       totalPages: Math.ceil(total / limit),
+    };
+  }
+
+  async adjustBalance(
+    customerId: string,
+    dto: AdjustBalanceDto,
+    adminId: string,
+    adminEmail: string,
+    ipAddress?: string,
+  ) {
+    // ── Validate inputs ────────────────────────────────────────────────────────
+    if (!dto.type || !['credit', 'debit'].includes(dto.type)) {
+      throw new BadRequestException('type must be "credit" or "debit"');
+    }
+    const amount = Number(dto.amount);
+    if (!amount || amount <= 0 || !Number.isFinite(amount)) {
+      throw new BadRequestException('amount must be a positive number');
+    }
+    // Max 2 decimal places
+    if (parseFloat(amount.toFixed(2)) !== amount && Math.round(amount * 100) / 100 !== amount) {
+      // lenient — just truncate to 2dp silently
+    }
+    if (amount > MAX_SINGLE_ADJUSTMENT) {
+      throw new BadRequestException(
+        `Single adjustment cannot exceed $${MAX_SINGLE_ADJUSTMENT.toLocaleString('en-US')}. Contact a super-admin for larger adjustments.`,
+      );
+    }
+    if (!dto.reason || dto.reason.trim().length < 5) {
+      throw new BadRequestException('reason must be at least 5 characters');
+    }
+    if (!dto.accountId) {
+      throw new BadRequestException('accountId is required');
+    }
+
+    // ── Fetch & verify account ─────────────────────────────────────────────────
+    const account = await this.prisma.account.findUnique({
+      where: { id: dto.accountId },
+    });
+    if (!account) throw new NotFoundException('Account not found');
+    if (account.userId !== customerId) {
+      throw new BadRequestException('Account does not belong to the specified customer');
+    }
+
+    const decimal = new Decimal(amount.toFixed(2));
+    const balanceBefore = Number(account.balance);
+
+    // ── Debit: check sufficient balance ───────────────────────────────────────
+    if (dto.type === 'debit') {
+      if (account.balance.lessThan(decimal)) {
+        throw new BadRequestException(
+          `Insufficient balance. Account has $${Number(account.balance).toLocaleString('en-US', { minimumFractionDigits: 2 })} but debit of $${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} was requested.`,
+        );
+      }
+    }
+
+    const txRef =
+      (dto.type === 'credit' ? 'ADMIN-CR-' : 'ADMIN-DB-') +
+      Date.now() +
+      '-' +
+      Math.floor(Math.random() * 10000);
+
+    // ── Atomic transaction ────────────────────────────────────────────────────
+    const txRecord = await this.prisma.$transaction(async (tx) => {
+      // Update account balance atomically (increment/decrement — no read-then-write race)
+      await tx.account.update({
+        where: { id: dto.accountId },
+        data: {
+          balance:
+            dto.type === 'credit'
+              ? { increment: decimal }
+              : { decrement: decimal },
+          availableBalance:
+            dto.type === 'credit'
+              ? { increment: decimal }
+              : { decrement: decimal },
+        },
+      });
+
+      // Create transaction ledger record
+      const createdTx = await tx.transaction.create({
+        data: {
+          transactionReference: txRef,
+          senderAccountId: dto.type === 'debit' ? dto.accountId : null,
+          receiverAccountId: dto.type === 'credit' ? dto.accountId : null,
+          amount: decimal,
+          fee: new Decimal(0),
+          currency: account.currency,
+          status: 'completed',
+          type: dto.type === 'credit' ? 'admin_credit' : 'admin_debit',
+          description: `Admin ${dto.type === 'credit' ? 'Credit' : 'Debit'}: ${dto.reason.trim()}`,
+          reason: dto.reason.trim(),
+          adminReference: dto.reference?.trim() || null,
+          performedByAdminId: adminId,
+          ipAddress: ipAddress || null,
+        },
+      });
+
+      return createdTx;
+    });
+
+    // Fetch updated balance for response & audit log
+    const updatedAccount = await this.prisma.account.findUnique({
+      where: { id: dto.accountId },
+      select: { balance: true, availableBalance: true },
+    });
+    const balanceAfter = Number(updatedAccount!.balance);
+
+    // ── Audit log ─────────────────────────────────────────────────────────────
+    await this.prisma.auditLog.create({
+      data: {
+        userId: adminId,
+        action: dto.type === 'credit' ? 'ADMIN_CREDIT_ACCOUNT' : 'ADMIN_DEBIT_ACCOUNT',
+        entityType: 'Account',
+        entityId: dto.accountId,
+        oldValues: JSON.stringify({ balance: balanceBefore }),
+        newValues: JSON.stringify({
+          balance: balanceAfter,
+          amount,
+          type: dto.type,
+          reason: dto.reason.trim(),
+          reference: dto.reference || null,
+          adminEmail,
+          customerId,
+          transactionReference: txRef,
+        }),
+        ipAddress: ipAddress || null,
+      },
+    });
+
+    // ── Customer notification ─────────────────────────────────────────────────
+    await this.prisma.notification.create({
+      data: {
+        userId: customerId,
+        title:
+          dto.type === 'credit'
+            ? 'Funds Credited to Your Account'
+            : 'Funds Debited from Your Account',
+        message:
+          dto.type === 'credit'
+            ? `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} has been credited to account ${account.accountNumber}. Reason: ${dto.reason.trim()}. New balance: $${balanceAfter.toLocaleString('en-US', { minimumFractionDigits: 2 })}.`
+            : `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} has been debited from account ${account.accountNumber}. Reason: ${dto.reason.trim()}. New balance: $${balanceAfter.toLocaleString('en-US', { minimumFractionDigits: 2 })}.`,
+        type: dto.type === 'credit' ? 'success' : 'warning',
+      },
+    });
+
+    return {
+      message: `Account ${dto.type === 'credit' ? 'credited' : 'debited'} successfully`,
+      transaction: txRecord,
+      updatedBalance: balanceAfter,
+      availableBalance: Number(updatedAccount!.availableBalance),
     };
   }
 }
