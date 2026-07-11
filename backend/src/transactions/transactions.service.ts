@@ -64,8 +64,25 @@ export class TransactionsService {
       this.prisma.transaction.count({ where: whereClause }),
     ]);
 
+    const mappedTransactions = transactions.map((tx) => {
+      const isReceiver = tx.receiverAccountId && accountIds.includes(tx.receiverAccountId);
+      const isSender = tx.senderAccountId && accountIds.includes(tx.senderAccountId);
+      
+      let flow = 'debit';
+      if (isReceiver && !isSender) {
+        flow = 'credit';
+      } else if (tx.type === 'credit' || tx.type === 'admin_credit' || tx.type === 'crypto_deposit') {
+        flow = 'credit';
+      }
+      
+      return {
+        ...tx,
+        flow,
+      };
+    });
+
     return {
-      transactions,
+      transactions: mappedTransactions,
       total,
       page,
       limit,
@@ -195,7 +212,20 @@ export class TransactionsService {
 
     if (!belongsToUser) throw new ForbiddenException('Access denied');
 
-    return transaction;
+    const isReceiver = transaction.receiverAccountId && accountIds.includes(transaction.receiverAccountId);
+    const isSender = transaction.senderAccountId && accountIds.includes(transaction.senderAccountId);
+    
+    let flow = 'debit';
+    if (isReceiver && !isSender) {
+      flow = 'credit';
+    } else if (transaction.type === 'credit' || transaction.type === 'admin_credit' || transaction.type === 'crypto_deposit') {
+      flow = 'credit';
+    }
+
+    return {
+      ...transaction,
+      flow,
+    };
   }
 
   async getAllTransactions(

@@ -1,4 +1,4 @@
-﻿-- AlterTable: Add admin adjustment fields to transactions
+-- AlterTable: Add admin adjustment fields to transactions
 ALTER TABLE "transactions"
   ADD COLUMN IF NOT EXISTS "reason" TEXT,
   ADD COLUMN IF NOT EXISTS "admin_reference" TEXT,

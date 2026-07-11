@@ -20,7 +20,7 @@ function normaliseBankTx(tx: any) {
     description: tx.description || "Fund Transfer",
     subLabel: tx.type?.replace(/_/g, " ").toUpperCase(),
     amount: parseFloat(tx.amount), fee: parseFloat(tx.fee || "0"),
-    flow: tx.type === "credit" ? "credit" : "debit",
+    flow: (tx.flow || (tx.type === "credit" || tx.type === "admin_credit" || tx.type === "crypto_deposit" ? "credit" : "debit")) as TxFlow,
     status: tx.status || "completed", date: new Date(tx.createdAt), raw: tx,
   };
 }

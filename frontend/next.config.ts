@@ -2,12 +2,6 @@ import type { NextConfig } from "next";
 import path from "path";
 
 const nextConfig: NextConfig = {
-  env: {
-    NEXT_PUBLIC_API_URL: 'https://intercontinentalcrest-backend.vercel.app/api',
-  },
-  turbopack: {
-    root: path.resolve(__dirname),
-  },
   devIndicators: false,
   images: {
     unoptimized: true,

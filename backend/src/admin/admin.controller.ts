@@ -84,11 +84,28 @@ export class AdminController {
     @Body() dto: { amount: number; description?: string },
   ) {
     this.checkAdmin(req);
-    return this.adminService.creditBankAccount(
-      id,
-      dto.amount,
-      dto.description || 'Admin Credit',
+    // Delegate to adjustBalance so every credit gets a complete audit trail,
+    // performedByAdminId, and customer notification — regardless of which
+    // endpoint the caller uses.
+    const account = await this.adminService.getAccountOwner(id);
+    if (!account) {
+      throw new ForbiddenException('Account not found');
+    }
+    const ipAddress: string | undefined =
+      req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+      req.ip ||
+      undefined;
+    return this.adminService.adjustBalance(
+      account.userId,
+      {
+        type: 'credit',
+        amount: dto.amount,
+        accountId: id,
+        reason: dto.description?.trim() || 'Admin Credit (legacy endpoint)',
+      },
       req.user.id,
+      req.user.email,
+      ipAddress,
     );
   }
 

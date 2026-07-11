@@ -92,9 +92,9 @@ export class AdminService {
     if (status) whereClause.status = status;
     if (search) {
       whereClause.OR = [
-        { fullName: { contains: search } },
-        { email: { contains: search } },
-        { phone: { contains: search } },
+        { fullName: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+        { phone: { contains: search, mode: 'insensitive' } },
       ];
     }
 
@@ -583,5 +583,13 @@ export class AdminService {
       updatedBalance: balanceAfter,
       availableBalance: Number(updatedAccount!.availableBalance),
     };
+  }
+
+  /** Helper used by the legacy credit endpoint to resolve the account owner. */
+  async getAccountOwner(accountId: string): Promise<{ userId: string } | null> {
+    return this.prisma.account.findUnique({
+      where: { id: accountId },
+      select: { userId: true },
+    });
   }
 }

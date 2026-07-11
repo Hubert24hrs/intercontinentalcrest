@@ -21,6 +21,13 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   }
 
   async onModuleDestroy() {
-    await this.$disconnect();
+    // In serverless environments (Vercel), the NestJS app instance is cached
+    // across invocations via the `cachedServer` singleton in main.ts.
+    // Disconnecting here would tear down the connection pool between warm
+    // invocations, causing P1001 errors on the next request.
+    // In long-running (non-serverless) environments, disconnection is safe.
+    if (!process.env.VERCEL) {
+      await this.$disconnect();
+    }
   }
 }

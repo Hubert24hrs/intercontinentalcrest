@@ -708,7 +708,7 @@ export default function DashboardPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-50 text-xs">
                   {transactions.map((tx) => {
-                    const isCredit = tx.type === "credit" || tx.type === "crypto_deposit";
+                    const isCredit = tx.flow === "credit" || tx.type === "credit" || tx.type === "admin_credit" || tx.type === "crypto_deposit";
                     const date     = new Date(tx.createdAt);
                     return (
                       <tr key={tx.id} className="hover:bg-gray-50/50 transition-colors">
