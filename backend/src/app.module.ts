@@ -12,6 +12,7 @@ import { CryptoModule } from './crypto/crypto.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { AdminModule } from './admin/admin.module';
 import { WalletsModule } from './wallets/wallets.module';
+import { SupportModule } from './support/support.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -29,6 +30,7 @@ import { AppController } from './app.controller';
     NotificationsModule,
     AdminModule,
     WalletsModule,
+    SupportModule,
   ],
   controllers: [AppController],
   providers: [],

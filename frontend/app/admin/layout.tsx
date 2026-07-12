@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   Globe, LayoutDashboard, Users, ArrowLeftRight, FileCheck,
   CreditCard, TrendingUp, ScrollText, Settings, Shield,
-  Menu, X, Bell, LogOut, User, Loader2,
+  Menu, X, Bell, LogOut, User, Loader2, MessageSquare,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { authApi } from "@/lib/api";
@@ -20,6 +20,7 @@ const adminNav = [
   { icon: TrendingUp,      label: "Investments",   href: "/admin/investments" },
   { icon: ScrollText,      label: "Audit Logs",    href: "/admin/audit" },
   { icon: Shield,          label: "Roles",         href: "/admin/roles" },
+  { icon: MessageSquare,   label: "Support",       href: "/admin/support" },
   { icon: Settings,        label: "Settings",      href: "/admin/settings" },
 ];
 

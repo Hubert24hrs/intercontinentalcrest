@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Globe, LayoutDashboard, ArrowLeftRight, Receipt, Users, PiggyBank,
-  TrendingUp, Bell, Settings, LogOut, Menu, X, ChevronDown, User, Loader2, Coins, Briefcase, ScrollText, Wallet, Landmark
+  TrendingUp, Bell, Settings, LogOut, Menu, X, ChevronDown, User, Loader2, Coins, Briefcase, ScrollText, Wallet, Landmark, MessageCircle
 } from "lucide-react";
 import { authApi, notificationsApi } from "@/lib/api";
 import { io } from "socket.io-client";
@@ -21,6 +21,7 @@ const navItems = [
   { icon: Briefcase, label: "Investment", href: "/dashboard/investments" },
   { icon: PiggyBank, label: "Transactions", href: "/dashboard/transactions" },
   { icon: ScrollText, label: "Statements", href: "/dashboard/statements" },
+  { icon: MessageCircle, label: "Support Chat", href: "/dashboard/support" },
   { icon: Settings, label: "Settings", href: "/dashboard/settings" },
 ];
 

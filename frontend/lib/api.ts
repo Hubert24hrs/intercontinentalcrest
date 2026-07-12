@@ -616,3 +616,42 @@ export const marketApi = {
   getQuotes: () => request('/crypto/market-quotes'),
 };
 
+export const supportApi = {
+  /** Start or fetch existing open conversation for the logged-in customer. */
+  getOrCreateConversation: () =>
+    request('/support/conversations', { method: 'POST' }),
+
+  /** Fetch messages for a conversation (paginated). */
+  getMessages: (conversationId: string, page = 1, limit = 100) =>
+    request(`/support/conversations/${conversationId}/messages?page=${page}&limit=${limit}`),
+
+  /** Customer sends a message. */
+  sendMessage: (conversationId: string, content: string) =>
+    request(`/support/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
+};
+
+export const adminSupportApi = {
+  /** Admin lists all conversations sorted by most recent activity. */
+  getConversations: (page = 1, limit = 30) =>
+    request(`/admin/support/conversations?page=${page}&limit=${limit}`),
+
+  /** Admin fetches messages for a specific conversation. */
+  getMessages: (conversationId: string, page = 1, limit = 100) =>
+    request(`/admin/support/conversations/${conversationId}/messages?page=${page}&limit=${limit}`),
+
+  /** Admin sends a reply. */
+  sendMessage: (conversationId: string, content: string) =>
+    request(`/admin/support/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
+
+  /** Admin closes a conversation. */
+  closeConversation: (conversationId: string) =>
+    request(`/admin/support/conversations/${conversationId}/close`, {
+      method: 'PATCH',
+    }),
+};

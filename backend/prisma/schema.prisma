@@ -41,6 +41,7 @@ model User {
   cryptoOrders              CryptoOrder[]
   cryptoWallets             CryptoWallet[]
   performedTransactions     Transaction[]  @relation("AdminTransactions")
+  customerConversations     SupportConversation[] @relation("CustomerConversations")
 
   @@map("users")
 }
@@ -264,3 +265,30 @@ model CryptoWallet {
   @@map("crypto_wallets")
 }
 
+model SupportConversation {
+  id            String           @id @default(uuid())
+  customerId    String           @map("customer_id")
+  status        String           @default("open")  // open | closed
+  createdAt     DateTime         @default(now()) @map("created_at")
+  updatedAt     DateTime         @updatedAt @map("updated_at")
+  lastMessageAt DateTime         @default(now()) @map("last_message_at")
+
+  customer      User             @relation("CustomerConversations", fields: [customerId], references: [id], onDelete: Cascade)
+  messages      SupportMessage[]
+
+  @@map("support_conversations")
+}
+
+model SupportMessage {
+  id             String              @id @default(uuid())
+  conversationId String              @map("conversation_id")
+  senderType     String              @map("sender_type")  // customer | admin
+  senderId       String              @map("sender_id")
+  content        String
+  createdAt      DateTime            @default(now()) @map("created_at")
+  readAt         DateTime?           @map("read_at")
+
+  conversation   SupportConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("support_messages")
+}
