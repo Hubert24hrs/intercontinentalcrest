@@ -1,72 +1,43 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Outfit } from "next/font/google";
+import { Inter, Fraunces } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-  display: "swap",
-});
-
-const outfit = Outfit({
-  subsets: ["latin"],
-  variable: "--font-outfit",
-  display: "swap",
-});
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
+const fraunces = Fraunces({ subsets: ["latin"], variable: "--font-fraunces", display: "swap", axes: ["opsz"] });
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 5,
+  themeColor: "#0b1f33",
 };
 
 export const metadata: Metadata = {
   title: {
-    default: "Intercontinental Crest — Global Banking. Trusted Worldwide.",
-    template: "%s | Intercontinental Crest",
+    default: "Intercontinental Crest | Online banking",
+    template: "%s · Intercontinental Crest",
   },
   description:
-    "Intercontinental Crest offers secure digital banking, international transfers, investment solutions, and lending services trusted by millions worldwide.",
-  keywords: [
-    "international banking",
-    "digital banking",
-    "online bank",
-    "investment solutions",
-    "loans",
-    "wealth management",
-    "intercontinental crest",
-  ],
-  authors: [{ name: "Intercontinental Crest" }],
-  creator: "Intercontinental Crest",
+    "Checking and savings accounts, transfers, bill pay, loans, investing and crypto in one dashboard. Intercontinental Crest is a demo platform and all balances are simulated.",
+  applicationName: "Intercontinental Crest",
   openGraph: {
     type: "website",
     locale: "en_US",
-    url: "https://intercontinentalcrest.com",
-    title: "Intercontinental Crest — Global Banking. Trusted Worldwide.",
-    description:
-      "Secure digital banking, investments, savings, and lending services for individuals and businesses worldwide.",
     siteName: "Intercontinental Crest",
+    title: "Intercontinental Crest | Online banking",
+    description: "Online banking demo platform. Balances and transactions are simulated.",
   },
   twitter: {
     card: "summary_large_image",
     title: "Intercontinental Crest",
-    description: "Global Banking. Trusted Worldwide.",
-  },
-  robots: {
-    index: true,
-    follow: true,
-    googleBot: { index: true, follow: true },
+    description: "Online banking demo platform.",
   },
 };
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${outfit.variable}`}>
-      <body className="font-sans antialiased">{children}</body>
+    <html lang="en" className={`${inter.variable} ${fraunces.variable}`}>
+      <body className="min-h-screen antialiased">{children}</body>
     </html>
   );
 }

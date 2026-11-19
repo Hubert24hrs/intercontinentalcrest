@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NON_CASH_TRANSACTION_TYPES } from '../common/pagination';
 import PDFDocument = require('pdfkit');
 
 @Injectable()
@@ -67,138 +68,117 @@ export class AccountsService {
     return { total, accounts };
   }
 
+  /** Signed cash effect of a ledger entry on one account: money in is positive, money out (incl. fees) negative. */
+  private netEffect(tx: { amount: any; fee: any; senderAccountId: string | null; receiverAccountId: string | null }, accountId: string): number {
+    const amount = Number(tx.amount);
+    const fee = Number(tx.fee || 0);
+    const isCredit = tx.receiverAccountId === accountId;
+    const isDebit = tx.senderAccountId === accountId;
+    if (isCredit && !isDebit) return amount;
+    if (isDebit && !isCredit) return -(amount + fee);
+    return 0;
+  }
+
+  private cashLedgerWhere(accountId: string) {
+    return {
+      OR: [{ senderAccountId: accountId }, { receiverAccountId: accountId }],
+      status: 'completed',
+      type: { notIn: NON_CASH_TRANSACTION_TYPES },
+    };
+  }
+
   async getMonthlyStatementsList(accountId: string, userId: string) {
     const account = await this.getAccountById(accountId, userId);
-    
-    // Fetch all completed transactions for this account
     const transactions = await this.prisma.transaction.findMany({
-      where: {
-        OR: [
-          { senderAccountId: accountId },
-          { receiverAccountId: accountId },
-        ],
-        status: 'completed',
-      },
+      where: this.cashLedgerWhere(accountId),
       orderBy: { createdAt: 'desc' },
     });
 
-    if (transactions.length === 0) {
-      // If there are no transactions, return statements starting from the registration month
-      const user = await this.prisma.user.findUnique({ where: { id: userId } });
-      const regDate = user?.createdAt || new Date();
-      const now = new Date();
-      const list = [];
-      let current = new Date(regDate.getFullYear(), regDate.getMonth(), 1);
-      while (current <= now) {
-        const periodStr = current.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-        list.push({
-          period: periodStr,
-          year: current.getFullYear(),
-          month: current.getMonth() + 1,
-          from: new Date(current.getFullYear(), current.getMonth(), 1).toISOString().split('T')[0],
-          to: new Date(current.getFullYear(), current.getMonth() + 1, 0).toISOString().split('T')[0],
-          txCount: 0,
-          credits: 0,
-          debits: 0,
-          closing: Number(account.balance),
-        });
-        current.setMonth(current.getMonth() + 1);
-      }
-      return list.reverse();
+    const byMonth = new Map<string, typeof transactions>();
+    for (const tx of transactions) {
+      const d = new Date(tx.createdAt);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      if (!byMonth.has(key)) byMonth.set(key, []);
+      byMonth.get(key)!.push(tx);
     }
 
-    // Group transactions by month
-    const groups: { [key: string]: typeof transactions } = {};
-    transactions.forEach(tx => {
-      const date = new Date(tx.createdAt);
-      const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(tx);
-    });
+    // One entry per month from account opening to now, newest first; balances are
+    // reconstructed backwards from the current balance.
+    const now = new Date();
+    const firstActivity = transactions.length ? new Date(transactions[transactions.length - 1].createdAt) : account.createdAt;
+    const start = new Date(Math.min(account.createdAt.getTime(), firstActivity.getTime()));
+    const cursor = new Date(now.getFullYear(), now.getMonth(), 1);
+    const stop = new Date(start.getFullYear(), start.getMonth(), 1);
 
-    const keys = Object.keys(groups).sort().reverse();
-    let runningBalance = Number(account.balance);
-
-    const list = keys.map(key => {
-      const [year, month] = key.split('-').map(Number);
-      const txs = groups[key];
-      
+    let closing = Number(account.balance);
+    const list: any[] = [];
+    while (cursor >= stop && list.length < 120) {
+      const year = cursor.getFullYear();
+      const monthIndex = cursor.getMonth();
+      const txs = byMonth.get(`${year}-${monthIndex}`) || [];
       let credits = 0;
       let debits = 0;
-      txs.forEach(tx => {
-        const amt = Number(tx.amount);
-        const isCredit = tx.receiverAccountId === accountId;
-        if (isCredit) credits += amt;
-        else debits += amt;
-      });
-
-      const periodStr = new Date(year, month - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
-      const item = {
-        period: periodStr,
+      for (const tx of txs) {
+        const effect = this.netEffect(tx, accountId);
+        if (effect > 0) credits += effect;
+        else debits += -effect;
+      }
+      const opening = closing - credits + debits;
+      list.push({
+        period: cursor.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
         year,
-        month,
-        from: new Date(year, month - 1, 1).toISOString().split('T')[0],
-        to: new Date(year, month, 0).toISOString().split('T')[0],
+        month: monthIndex + 1,
+        from: new Date(Date.UTC(year, monthIndex, 1)).toISOString().slice(0, 10),
+        to: new Date(Date.UTC(year, monthIndex + 1, 0)).toISOString().slice(0, 10),
         txCount: txs.length,
-        credits,
-        debits,
-        closing: runningBalance,
-      };
-
-      runningBalance = runningBalance - credits + debits;
-
-      return item;
-    });
-
+        credits: Math.round(credits * 100) / 100,
+        debits: Math.round(debits * 100) / 100,
+        opening: Math.round(opening * 100) / 100,
+        closing: Math.round(closing * 100) / 100,
+      });
+      closing = opening;
+      cursor.setMonth(cursor.getMonth() - 1);
+    }
     return list;
   }
 
   async generatePdfStatement(accountId: string, userId: string, year: number, month: number): Promise<Buffer> {
     const account = await this.getAccountById(accountId, userId);
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
 
     const startDate = new Date(year, month - 1, 1);
-    const endDate = new Date(year, month, 0, 23, 59, 59);
+    const endDate = new Date(year, month, 0, 23, 59, 59, 999);
 
-    const transactions = await this.prisma.transaction.findMany({
-      where: {
-        OR: [
-          { senderAccountId: accountId },
-          { receiverAccountId: accountId },
-        ],
-        createdAt: {
-          gte: startDate,
-          lte: endDate,
-        },
-        status: 'completed',
-      },
-      orderBy: { createdAt: 'asc' },
-    });
+    const [transactions, later] = await Promise.all([
+      this.prisma.transaction.findMany({
+        where: { ...this.cashLedgerWhere(accountId), createdAt: { gte: startDate, lte: endDate } },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.transaction.findMany({
+        where: { ...this.cashLedgerWhere(accountId), createdAt: { gt: endDate } },
+        select: { amount: true, fee: true, senderAccountId: true, receiverAccountId: true },
+      }),
+    ]);
 
     let totalCredits = 0;
     let totalDebits = 0;
-
-    const list = transactions.map(tx => {
-      const amt = Number(tx.amount);
-      const isCredit = tx.receiverAccountId === accountId;
-      if (isCredit) {
-        totalCredits += amt;
-      } else {
-        totalDebits += amt;
-      }
+    const list = transactions.map((tx) => {
+      const effect = this.netEffect(tx, accountId);
+      if (effect > 0) totalCredits += effect;
+      else totalDebits += -effect;
       return {
-        date: new Date(tx.createdAt).toLocaleDateString(),
+        date: new Date(tx.createdAt).toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
         ref: tx.transactionReference,
         desc: tx.description || 'Transfer',
-        type: isCredit ? 'CREDIT' : 'DEBIT',
-        amount: amt,
+        type: effect >= 0 ? 'CREDIT' : 'DEBIT',
+        amount: Math.abs(effect),
       };
     });
 
-    const closingBalance = Number(account.balance);
+    const laterNet = later.reduce((sum, tx) => sum + this.netEffect(tx, accountId), 0);
+    const closingBalance = Number(account.balance) - laterNet;
     const startingBalance = closingBalance - totalCredits + totalDebits;
+
 
     return new Promise((resolve, reject) => {
       const doc = new PDFDocument({ margin: 50 });
@@ -212,7 +192,7 @@ export class AccountsService {
 
       // Brand Title
       doc.fillColor('#ffffff').fontSize(22).font('Helvetica-Bold').text('INTERCONTINENTAL CREST', 50, 40);
-      doc.fontSize(9).font('Helvetica').text('Global Banking. Trusted Worldwide.', 50, 70);
+      doc.fontSize(9).font('Helvetica').text('Digital banking demo platform', 50, 70);
 
       // Statement Label
       doc.fillColor('#ffffff').fontSize(14).font('Helvetica-Bold').text('ACCOUNT STATEMENT', doc.page.width - 250, 40, { align: 'right', width: 200 });
@@ -302,8 +282,8 @@ export class AccountsService {
 
       // Footer
       doc.fillColor('#9CA3AF').fontSize(8);
-      const today = new Date().toLocaleDateString();
-      doc.text(`Generated on ${today} | Intercontinental Crest Simulated Statement | FDIC Insured Simulation`, 50, doc.page.height - 50, { align: 'center', width: doc.page.width - 100 });
+      const today = new Date().toLocaleDateString('en-US', { dateStyle: 'medium' });
+      doc.text(`Generated ${today} | Demo statement. Balances are simulated and not FDIC insured.`, 50, doc.page.height - 50, { align: 'center', width: doc.page.width - 100 });
 
       doc.end();
     });

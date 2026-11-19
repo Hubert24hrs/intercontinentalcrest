@@ -1,41 +1,55 @@
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { getAccessSecret } from './jwt.config';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  role: string;
+  fullName: string;
+}
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor() {
+  constructor(private readonly prisma: PrismaService) {
     super({
       jwtFromRequest: ExtractJwt.fromExtractors([
         ExtractJwt.fromAuthHeaderAsBearerToken(),
-        (req) => {
-          let token = null;
-          if (req && req.cookies) {
-            token = req.cookies['accessToken'] || req.cookies['jwt'];
-          }
-          return token;
-        },
+        (req) => (req && req.cookies ? req.cookies['accessToken'] || null : null),
       ]),
       ignoreExpiration: false,
-      secretOrKey: process.env.JWT_SECRET || 'supersecretjwtkey!changeme',
+      secretOrKeyProvider: (_req: unknown, _raw: unknown, done: (err: any, secret?: string) => void) => {
+        try {
+          done(null, getAccessSecret());
+        } catch (err) {
+          done(err);
+        }
+      },
     });
   }
 
-  async validate(payload: any) {
-    // ARCHITECTURAL DECISION: Trust the cryptographically-verified JWT payload directly.
-    // No per-request DB lookup is performed here — this is intentional for performance.
-    //
-    // Rationale: The JWT is signed with JWT_SECRET (known only to the server), so the
-    // payload is tamper-proof. Suspended/deleted account enforcement happens at:
-    //   • Login time    → validateUser() does a DB lookup + bcrypt verify
-    //   • Token refresh → refreshAccessToken() always does a DB lookup
-    //
-    // If you need immediate revocation on protected routes (e.g. to block suspended users
-    // mid-session without waiting for token expiry), replace this return with:
-    //   const user = await this.usersService.findOneById(payload.sub);
-    //   if (!user || user.status !== 'active') throw new UnauthorizedException();
-    //   return user;
-    if (!payload?.sub) throw new UnauthorizedException('Invalid token');
-    return { id: payload.sub, email: payload.email, role: payload.role, fullName: payload.fullName };
+  /**
+   * Only `typ: "access"` tokens are accepted here — refresh tokens and 2FA
+   * challenge tokens are rejected. The user is re-read from the database so a
+   * suspended account or a changed role takes effect immediately.
+   */
+  async validate(payload: any): Promise<AuthUser> {
+    if (!payload?.sub || payload.typ !== 'access') {
+      throw new UnauthorizedException('Invalid token');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { id: true, email: true, role: true, fullName: true, status: true },
+    });
+
+    if (!user) throw new UnauthorizedException('Session expired. Please sign in again.');
+    if (user.status !== 'active') {
+      throw new UnauthorizedException('Your account is not active. Please contact support.');
+    }
+
+    return { id: user.id, email: user.email, role: user.role, fullName: user.fullName };
   }
 }

@@ -1,29 +1,66 @@
-import { Controller, Post, Patch, Body, Res, Req, UseGuards, Get, HttpCode, HttpStatus, BadRequestException, UnauthorizedException } from '@nestjs/common';
-import { Response, Request } from 'express';
+import {
+  Controller,
+  Post,
+  Patch,
+  Body,
+  Res,
+  Req,
+  UseGuards,
+  Get,
+  HttpCode,
+  HttpStatus,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { Response, Request, CookieOptions } from 'express';
 import { AuthService } from './auth.service';
-import { RegisterDto } from './dto/register.dto';
+import { RegisterDto, PASSWORD_RULE, PASSWORD_RULE_MESSAGE } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { Verify2FaDto } from './dto/verify-2fa.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
-import { IsNotEmpty, IsString, MinLength, IsOptional } from 'class-validator';
+import { IsNotEmpty, IsString, IsOptional, MaxLength, MinLength, Matches, IsEmail } from 'class-validator';
+import { ACCESS_COOKIE_MAX_AGE_MS, REFRESH_COOKIE_MAX_AGE_MS } from './jwt.config';
 
 class UpdateProfileDto {
-  @IsOptional() @IsString() fullName?: string;
-  @IsOptional() @IsString() phone?: string;
+  @IsOptional() @IsString() @MinLength(2) @MaxLength(80) fullName?: string;
+  @IsOptional() @IsString() @Matches(/^(\+?[0-9 ()-]{7,20})?$/, { message: 'Enter a valid phone number' }) phone?: string;
 }
 
 class ChangePasswordDto {
-  @IsNotEmpty() @IsString() currentPassword: string;
-  @IsNotEmpty() @IsString() @MinLength(12) newPassword: string;
+  @IsNotEmpty() @IsString() @MaxLength(200) currentPassword: string;
+  @IsNotEmpty() @IsString() @Matches(PASSWORD_RULE, { message: PASSWORD_RULE_MESSAGE }) newPassword: string;
 }
 
 class ForgotPasswordDto {
-  @IsNotEmpty() @IsString() email: string;
+  @IsNotEmpty() @IsEmail({}, { message: 'Enter a valid email address' }) @MaxLength(254) email: string;
 }
 
 class ResetPasswordDto {
-  @IsNotEmpty() @IsString() token: string;
-  @IsNotEmpty() @IsString() @MinLength(12) newPassword: string;
+  @IsNotEmpty() @IsString() @MaxLength(200) token: string;
+  @IsNotEmpty() @IsString() @Matches(PASSWORD_RULE, { message: PASSWORD_RULE_MESSAGE }) newPassword: string;
+}
+
+class TwoFaAuthenticateDto {
+  @IsNotEmpty() @IsString() @MaxLength(2000) tempToken: string;
+  @IsNotEmpty() @IsString() @Matches(/^\d{6}$/, { message: 'Enter the 6-digit code' }) code: string;
+}
+
+function isSecureRuntime(): boolean {
+  return process.env.NODE_ENV === 'production' || !!process.env.VERCEL;
+}
+
+/**
+ * The web app talks to this API through its own origin (Next.js rewrite of /api),
+ * so cookies are first-party: httpOnly + SameSite=Lax is enough and nothing
+ * sensitive has to live in localStorage.
+ */
+function cookieOptions(maxAge?: number): CookieOptions {
+  return {
+    httpOnly: true,
+    secure: isSecureRuntime(),
+    sameSite: 'lax',
+    path: '/',
+    ...(maxAge !== undefined ? { maxAge } : {}),
+  };
 }
 
 @Controller('auth')
@@ -37,17 +74,14 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(
-    @Body() loginDto: LoginDto,
-    @Res({ passthrough: true }) res: Response,
-  ) {
+  async login(@Body() loginDto: LoginDto, @Res({ passthrough: true }) res: Response) {
     const user = await this.authService.validateUser(loginDto);
-    const result = await this.authService.login(user) as any;
+    const result = (await this.authService.login(user)) as any;
 
-    if (result.require2Fa) return result;
+    if (result.require2Fa) return { require2Fa: true, tempToken: result.tempToken };
 
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
-    return { user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken };
+    return { user: result.user, accessToken: result.accessToken };
   }
 
   @Post('2fa/generate')
@@ -65,14 +99,10 @@ export class AuthController {
 
   @Post('2fa/authenticate')
   @HttpCode(HttpStatus.OK)
-  async authenticate2Fa(
-    @Body('tempToken') tempToken: string,
-    @Body('code') code: string,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const result = await this.authService.authenticate2Fa(tempToken, code) as any;
+  async authenticate2Fa(@Body() dto: TwoFaAuthenticateDto, @Res({ passthrough: true }) res: Response) {
+    const result = (await this.authService.authenticate2Fa(dto.tempToken, dto.code)) as any;
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
-    return { user: result.user, accessToken: result.accessToken, refreshToken: result.refreshToken };
+    return { user: result.user, accessToken: result.accessToken };
   }
 
   @Post('2fa/disable')
@@ -84,48 +114,30 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
-  async refresh(
-    @Req() req: Request,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    // Accept refresh token from cookie (standard browsers) or request body (iOS Safari — ITP blocks cross-site cookies)
-    const refreshToken = (req as any).cookies?.['refreshToken'] || (req as any).body?.refreshToken;
-    if (!refreshToken) {
-      throw new UnauthorizedException('No refresh token');
-    }
-    const result = await this.authService.refreshAccessToken(refreshToken) as any;
+  async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
+    const refreshToken = (req as any).cookies?.['refreshToken'];
+    if (!refreshToken) throw new UnauthorizedException('Session expired. Please sign in again.');
+
+    const result = (await this.authService.refreshAccessToken(refreshToken)) as any;
     this.setAuthCookies(res, result.accessToken, result.refreshToken);
-    return { accessToken: result.accessToken, refreshToken: result.refreshToken };
+    return { user: result.user, accessToken: result.accessToken };
   }
 
+  /** Logout never requires a valid session — it always clears the cookies. */
   @Post('logout')
-  @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   async logout(@Res({ passthrough: true }) res: Response) {
-    res.clearCookie('accessToken');
-    res.clearCookie('refreshToken');
+    res.clearCookie('accessToken', cookieOptions());
+    res.clearCookie('refreshToken', cookieOptions());
     return { success: true };
   }
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async me(@Req() req: any) {
-    // Try to return fresh user data (includes twoFactorEnabled, phone, etc.)
-    // Falls back to JWT payload if DB is unavailable (different Vercel cold-start instance)
     const freshUser = await this.authService.getUserById(req.user.id);
-    if (freshUser) {
-      return {
-        user: {
-          id: freshUser.id,
-          fullName: freshUser.fullName,
-          email: freshUser.email,
-          role: freshUser.role,
-          phone: freshUser.phone,
-          twoFactorEnabled: freshUser.twoFactorEnabled,
-        },
-      };
-    }
-    return { user: req.user };
+    if (!freshUser) throw new UnauthorizedException('Session expired. Please sign in again.');
+    return { user: this.authService.toPublicUser(freshUser) };
   }
 
   @Patch('profile')
@@ -139,9 +151,6 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @HttpCode(HttpStatus.OK)
   async changePassword(@Req() req: any, @Body() dto: ChangePasswordDto) {
-    if (!dto.currentPassword || !dto.newPassword) {
-      throw new BadRequestException('Current and new password are required');
-    }
     return this.authService.changePassword(req.user.id, dto.currentPassword, dto.newPassword);
   }
 
@@ -158,18 +167,7 @@ export class AuthController {
   }
 
   private setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
-    const isProd = process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
-    res.cookie('accessToken', accessToken, {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? 'none' : 'lax',
-      maxAge: 8 * 60 * 60 * 1000,
-    });
-    res.cookie('refreshToken', refreshToken, {
-      httpOnly: true,
-      secure: isProd,
-      sameSite: isProd ? 'none' : 'lax',
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-    });
+    res.cookie('accessToken', accessToken, cookieOptions(ACCESS_COOKIE_MAX_AGE_MS));
+    res.cookie('refreshToken', refreshToken, cookieOptions(REFRESH_COOKIE_MAX_AGE_MS));
   }
 }

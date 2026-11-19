@@ -3,6 +3,15 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CryptoService } from '../crypto/crypto.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { Decimal } from '@prisma/client/runtime/library';
+import { DEFAULT_WALLETS, LEGACY_SHARED_ADDRESSES, demoDepositAddress } from './demo-wallets';
+import { creditCoins, debitCoins } from '../crypto/crypto-ledger';
+
+/** Simulated deposits are capped per request so a typo can't create absurd balances. */
+const MAX_SIMULATED_DEPOSIT_USD = 250_000;
+
+function usd(n: number): string {
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
 @Injectable()
 export class WalletsService {
@@ -12,259 +21,203 @@ export class WalletsService {
     private notificationsService: NotificationsService,
   ) {}
 
-  private readonly defaultWallets = [
-    { coinId: 'bitcoin', coinSymbol: 'BTC', coinName: 'Bitcoin', address: 'bc1quj2mqa6xt0kr47suvavff4lnak3pujv4efrz60' },
-    { coinId: 'ethereum', coinSymbol: 'ETH', coinName: 'Ethereum', address: '0xbb1097d8642dfbf2b2a9c1676ac06c9715462f95' },
-    { coinId: 'tether', coinSymbol: 'USDT', coinName: 'Tether', address: '0xbb1097d8642dfbf2b2a9c1676ac06c9715462f95' },
-    { coinId: 'usd-coin', coinSymbol: 'USDC', coinName: 'USD Coin', address: '0xbb1097d8642dfbf2b2a9c1676ac06c9715462f95' },
-    { coinId: 'binancecoin', coinSymbol: 'BNB', coinName: 'BNB', address: '0xbb1097d8642dfbf2b2a9c1676ac06c9715462f95' },
-    { coinId: 'solana', coinSymbol: 'SOL', coinName: 'Solana', address: 'HFETb6Vz7Tgp5Xx2dURvxbxfs2AVPZHAhmvJewGNEBi8' },
-    { coinId: 'ripple', coinSymbol: 'XRP', coinName: 'Ripple', address: '0xbb1097d8642dfbf2b2a9c1676ac06c9715462f95' },
-  ];
-
+  /**
+   * Returns the user's custody wallets. Also self-heals older data:
+   *  - creates any missing default wallets,
+   *  - replaces the legacy shared addresses with per-user demo references,
+   *  - re-syncs wallet balances with holdings (the source of truth).
+   */
   async getWallets(userId: string) {
-    let wallets = await this.prisma.cryptoWallet.findMany({
-      where: { userId },
-      orderBy: { coinName: 'asc' },
-    });
+    const [wallets, holdings] = await Promise.all([
+      this.prisma.cryptoWallet.findMany({ where: { userId } }),
+      this.prisma.cryptoHolding.findMany({ where: { userId } }),
+    ]);
 
-    // Dynamically backfill wallets for users registered prior to this feature
-    if (wallets.length < this.defaultWallets.length) {
-      const existingCoinIds = new Set(wallets.map((w) => w.coinId));
-      const missing = this.defaultWallets.filter((w) => !existingCoinIds.has(w.coinId));
+    const existing = new Set(wallets.map((w) => w.coinId));
+    const missing = DEFAULT_WALLETS.filter((w) => !existing.has(w.coinId));
+    if (missing.length) {
+      await this.prisma.cryptoWallet.createMany({
+        data: missing.map((w) => ({
+          userId,
+          coinId: w.coinId,
+          coinSymbol: w.coinSymbol,
+          coinName: w.coinName,
+          address: demoDepositAddress(userId, w.coinSymbol),
+          balance: holdings.find((h) => h.coinId === w.coinId)?.quantity ?? 0,
+        })),
+        skipDuplicates: true,
+      });
+    }
 
-      if (missing.length > 0) {
-        await this.prisma.$transaction(async (tx) => {
-          for (const w of missing) {
-            await tx.cryptoWallet.create({
-              data: {
-                userId,
-                coinId: w.coinId,
-                coinSymbol: w.coinSymbol,
-                coinName: w.coinName,
-                address: w.address,
-                balance: 0.00,
-              },
-            });
-          }
-        });
-        wallets = await this.prisma.cryptoWallet.findMany({
-          where: { userId },
-          orderBy: { coinName: 'asc' },
+    for (const w of wallets) {
+      const holdingQty = holdings.find((h) => h.coinId === w.coinId)?.quantity ?? new Decimal(0);
+      const needsAddress = LEGACY_SHARED_ADDRESSES.has(w.address) || !w.address.startsWith('DEMO-');
+      const needsBalance = !new Decimal(w.balance).equals(holdingQty);
+      if (needsAddress || needsBalance) {
+        await this.prisma.cryptoWallet.update({
+          where: { id: w.id },
+          data: {
+            ...(needsAddress ? { address: demoDepositAddress(userId, w.coinSymbol) } : {}),
+            ...(needsBalance ? { balance: holdingQty } : {}),
+          },
         });
       }
     }
 
-    return wallets;
+    return this.prisma.cryptoWallet.findMany({ where: { userId }, orderBy: { coinName: 'asc' } });
   }
 
-  async deposit(userId: string, dto: { coinId: string; amount: number }) {
-    if (dto.amount <= 0) {
-      throw new BadRequestException('Deposit amount must be greater than 0');
-    }
-
-    const wallet = await this.prisma.cryptoWallet.findUnique({
-      where: { userId_coinId: { userId, coinId: dto.coinId } },
-    });
-    if (!wallet) {
-      throw new NotFoundException(`Wallet for coin ${dto.coinId} not found`);
-    }
-
-    // Get live price to calculate USD equivalent and update CryptoHolding buy price
+  private async priceFor(coinId: string): Promise<number> {
     const markets = await this.cryptoService.getLiveMarkets();
-    const coin = markets.find((c) => c.id === dto.coinId);
-    const pricePerCoin = coin ? coin.current_price : 1.00;
-    const usdValue = dto.amount * pricePerCoin;
+    const coin = markets.find((c) => c.id === coinId);
+    if (coin?.current_price) return coin.current_price;
+    if (coinId === 'tether' || coinId === 'usd-coin') return 1;
+    throw new BadRequestException('A live price for this asset is not available right now. Try again shortly.');
+  }
 
-    // Find the user's primary checking account to link the transaction to their ledger
-    const checkingAccount = await this.prisma.account.findFirst({
-      where: { userId, accountType: 'checking' },
-    });
-    const ledgerAccountId = checkingAccount?.id ?? null;
+  /** Simulated deposit: credits the custody wallet directly (no on-chain transfer happens). */
+  async deposit(userId: string, dto: { coinId: string; amount: number }) {
+    const wallet = await this.prisma.cryptoWallet.findUnique({ where: { userId_coinId: { userId, coinId: dto.coinId } } });
+    if (!wallet) throw new NotFoundException('Wallet not found');
 
-    const txRef = 'DEP-' + Date.now() + '-' + Math.floor(Math.random() * 10000);
+    const price = await this.priceFor(dto.coinId);
+    const usdValue = dto.amount * price;
+    if (usdValue > MAX_SIMULATED_DEPOSIT_USD) {
+      throw new BadRequestException(`Simulated deposits are limited to $${usd(MAX_SIMULATED_DEPOSIT_USD)} per request`);
+    }
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      // 1. Update wallet balance
-      const updatedWallet = await tx.cryptoWallet.update({
-        where: { userId_coinId: { userId, coinId: dto.coinId } },
+    const order = await this.prisma.$transaction(async (tx) => {
+      await creditCoins(tx, userId, wallet, dto.amount, price);
+      return tx.cryptoOrder.create({
         data: {
-          balance: { increment: new Decimal(dto.amount) },
-        },
-      });
-
-      // 2. Upsert CryptoHolding
-      const existingHolding = await tx.cryptoHolding.findUnique({
-        where: { userId_coinId: { userId, coinId: dto.coinId } },
-      });
-
-      if (existingHolding) {
-        const oldQty = Number(existingHolding.quantity);
-        const oldAvg = Number(existingHolding.avgBuyPrice);
-        const newQty = oldQty + dto.amount;
-        const newAvg = (oldAvg * oldQty + pricePerCoin * dto.amount) / newQty;
-
-        await tx.cryptoHolding.update({
-          where: { userId_coinId: { userId, coinId: dto.coinId } },
-          data: {
-            quantity: new Decimal(newQty.toFixed(8)),
-            avgBuyPrice: new Decimal(newAvg.toFixed(8)),
-          },
-        });
-      } else {
-        await tx.cryptoHolding.create({
-          data: {
-            userId,
-            coinId: dto.coinId,
-            coinSymbol: wallet.coinSymbol,
-            coinName: wallet.coinName,
-            quantity: new Decimal(dto.amount.toFixed(8)),
-            avgBuyPrice: new Decimal(pricePerCoin.toFixed(8)),
-          },
-        });
-      }
-
-      // 3. Log to transactions ledger (receiverAccountId set to user's checking account for ledger tracking)
-      await tx.transaction.create({
-        data: {
-          transactionReference: txRef,
-          senderAccountId: null,
-          receiverAccountId: ledgerAccountId,
-          amount: new Decimal(usdValue.toFixed(2)),
-          fee: new Decimal(0.00),
-          currency: 'USD',
+          userId,
+          coinId: wallet.coinId,
+          coinSymbol: wallet.coinSymbol,
+          coinName: wallet.coinName,
+          type: 'deposit',
+          quantity: new Decimal(dto.amount.toFixed(8)),
+          priceAtTime: new Decimal(price.toFixed(8)),
+          totalUsd: new Decimal(usdValue.toFixed(2)),
+          fee: new Decimal(0),
           status: 'completed',
-          type: 'crypto_deposit',
-          description: `Crypto Deposit: ${dto.amount} ${wallet.coinSymbol} (${wallet.coinName})`,
-          metadata: JSON.stringify({
-            coinId: dto.coinId,
-            coinSymbol: wallet.coinSymbol,
-            quantity: dto.amount,
-            pricePerCoin,
-          }),
         },
       });
-
-      return updatedWallet;
     });
 
-    // 4. Trigger user notification
     try {
       await this.notificationsService.createNotification(
         userId,
-        'Crypto Wallet Deposit',
-        `Your wallet has been credited with ${dto.amount} ${wallet.coinSymbol} (approx. $${usdValue.toLocaleString('en-US', { minimumFractionDigits: 2 })}). Reference: ${txRef}`,
+        'Crypto deposit credited',
+        `${dto.amount} ${wallet.coinSymbol} (≈ $${usd(usdValue)}) was credited to your ${wallet.coinName} wallet (simulated deposit).`,
         'success',
       );
     } catch (err) {
       console.error('Failed to send deposit notification:', err);
     }
 
-    return result;
+    const updated = await this.prisma.cryptoWallet.findUnique({ where: { id: wallet.id } });
+    return { wallet: updated, order };
   }
 
+  /** Simulated withdrawal: debits the custody wallet; nothing is broadcast to a blockchain. */
   async withdraw(userId: string, dto: { coinId: string; amount: number; destinationAddress: string }) {
-    if (dto.amount <= 0) {
-      throw new BadRequestException('Withdrawal amount must be greater than 0');
-    }
-    if (!dto.destinationAddress || dto.destinationAddress.trim() === '') {
-      throw new BadRequestException('Destination address is required');
-    }
+    const wallet = await this.prisma.cryptoWallet.findUnique({ where: { userId_coinId: { userId, coinId: dto.coinId } } });
+    if (!wallet) throw new NotFoundException('Wallet not found');
 
-    const wallet = await this.prisma.cryptoWallet.findUnique({
-      where: { userId_coinId: { userId, coinId: dto.coinId } },
-    });
-    if (!wallet) {
-      throw new NotFoundException(`Wallet for coin ${dto.coinId} not found`);
-    }
+    const destination = dto.destinationAddress.trim();
+    if (destination === wallet.address) throw new BadRequestException('You cannot withdraw to your own deposit reference');
 
-    if (new Decimal(wallet.balance).lessThan(new Decimal(dto.amount))) {
-      throw new BadRequestException('Insufficient wallet balance');
-    }
+    const price = await this.priceFor(dto.coinId).catch(() => 0);
+    const usdValue = dto.amount * price;
 
-    // Get live price to calculate USD equivalent
-    const markets = await this.cryptoService.getLiveMarkets();
-    const coin = markets.find((c) => c.id === dto.coinId);
-    const pricePerCoin = coin ? coin.current_price : 1.00;
-    const usdValue = dto.amount * pricePerCoin;
-
-    // Find the user's primary checking account to link the transaction to their ledger
-    const checkingAccount = await this.prisma.account.findFirst({
-      where: { userId, accountType: 'checking' },
-    });
-    const ledgerAccountId = checkingAccount?.id ?? null;
-
-    const txRef = 'WTH-' + Date.now() + '-' + Math.floor(Math.random() * 10000);
-
-    const result = await this.prisma.$transaction(async (tx) => {
-      // 1. Update wallet balance
-      const updatedWallet = await tx.cryptoWallet.update({
-        where: { userId_coinId: { userId, coinId: dto.coinId } },
+    const order = await this.prisma.$transaction(async (tx) => {
+      await debitCoins(tx, userId, wallet.coinId, dto.amount);
+      return tx.cryptoOrder.create({
         data: {
-          balance: { decrement: new Decimal(dto.amount) },
-        },
-      });
-
-      // 2. Update CryptoHolding
-      const existingHolding = await tx.cryptoHolding.findUnique({
-        where: { userId_coinId: { userId, coinId: dto.coinId } },
-      });
-
-      if (existingHolding) {
-        const currentQty = Number(existingHolding.quantity);
-        const newQty = Math.max(0, currentQty - dto.amount);
-
-        if (newQty <= 0.000001) {
-          await tx.cryptoHolding.delete({
-            where: { userId_coinId: { userId, coinId: dto.coinId } },
-          });
-        } else {
-          await tx.cryptoHolding.update({
-            where: { userId_coinId: { userId, coinId: dto.coinId } },
-            data: {
-              quantity: new Decimal(newQty.toFixed(8)),
-            },
-          });
-        }
-      }
-
-      // 3. Log to transactions ledger (senderAccountId set to user's checking account for ledger tracking)
-      await tx.transaction.create({
-        data: {
-          transactionReference: txRef,
-          senderAccountId: ledgerAccountId,
-          receiverAccountId: null,
-          amount: new Decimal(usdValue.toFixed(2)),
-          fee: new Decimal(0.00),
-          currency: 'USD',
+          userId,
+          coinId: wallet.coinId,
+          coinSymbol: wallet.coinSymbol,
+          coinName: wallet.coinName,
+          type: 'withdrawal',
+          quantity: new Decimal(dto.amount.toFixed(8)),
+          priceAtTime: new Decimal(price.toFixed(8)),
+          totalUsd: new Decimal(usdValue.toFixed(2)),
+          fee: new Decimal(0),
           status: 'completed',
-          type: 'crypto_withdrawal',
-          description: `Crypto Withdrawal: ${dto.amount} ${wallet.coinSymbol} to ${dto.destinationAddress}`,
-          metadata: JSON.stringify({
-            coinId: dto.coinId,
-            coinSymbol: wallet.coinSymbol,
-            quantity: dto.amount,
-            pricePerCoin,
-            destinationAddress: dto.destinationAddress,
-          }),
+          networkAddress: destination,
         },
       });
-
-      return updatedWallet;
     });
 
-    // 4. Trigger user notification
     try {
       await this.notificationsService.createNotification(
         userId,
-        'Crypto Wallet Withdrawal',
-        `Your withdrawal of ${dto.amount} ${wallet.coinSymbol} to ${dto.destinationAddress} has been successfully completed. Reference: ${txRef}`,
-        'success',
+        'Crypto withdrawal completed',
+        `${dto.amount} ${wallet.coinSymbol} was withdrawn to ${destination.slice(0, 10)}…${destination.slice(-6)} (simulated).`,
+        'info',
       );
     } catch (err) {
       console.error('Failed to send withdrawal notification:', err);
     }
 
-    return result;
+    const updated = await this.prisma.cryptoWallet.findUnique({ where: { id: wallet.id } });
+    return { wallet: updated, order };
+  }
+
+  /** Deposits and withdrawals for the wallet screens, including entries recorded by older versions. */
+  async getHistory(userId: string, coinId?: string) {
+    const [orders, legacy] = await Promise.all([
+      this.prisma.cryptoOrder.findMany({
+        where: { userId, type: { in: ['deposit', 'withdrawal'] }, ...(coinId ? { coinId } : {}) },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+      this.prisma.transaction.findMany({
+        where: {
+          type: { in: ['crypto_deposit', 'crypto_withdrawal'] },
+          OR: [{ senderAccount: { userId } }, { receiverAccount: { userId } }],
+        },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      }),
+    ]);
+
+    const legacyMapped = legacy
+      .map((t) => {
+        let meta: any = {};
+        try {
+          meta = t.metadata ? JSON.parse(t.metadata) : {};
+        } catch {
+          meta = {};
+        }
+        return {
+          id: t.id,
+          coinId: meta.coinId ?? null,
+          coinSymbol: meta.coinSymbol ?? '',
+          type: t.type === 'crypto_deposit' ? 'deposit' : 'withdrawal',
+          quantity: meta.quantity ?? null,
+          totalUsd: t.amount,
+          networkAddress: meta.destinationAddress ?? null,
+          status: t.status,
+          reference: t.transactionReference,
+          createdAt: t.createdAt,
+        };
+      })
+      .filter((t) => !coinId || t.coinId === coinId);
+
+    const mapped = orders.map((o) => ({
+      id: o.id,
+      coinId: o.coinId,
+      coinSymbol: o.coinSymbol,
+      type: o.type,
+      quantity: o.quantity,
+      totalUsd: o.totalUsd,
+      networkAddress: o.networkAddress,
+      status: o.status,
+      reference: o.id.slice(0, 8).toUpperCase(),
+      createdAt: o.createdAt,
+    }));
+
+    return [...mapped, ...legacyMapped].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
   }
 }

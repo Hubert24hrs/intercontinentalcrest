@@ -1,16 +1,12 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Decimal } from '@prisma/client/runtime/library';
 import { NotificationsService } from '../notifications/notifications.service';
+import { CreateInvestmentDto } from './dto/investment.dto';
+import { newReference } from '../common/pagination';
 
-export interface CreateInvestmentDto {
-  planName: string;
-  principalAmount: number;
-  interestRate?: number;
-  termMonths?: number;
-  startDate?: string;
-  maturityDate?: string;
-  accountId: string; // the source checking/savings account ID
+function money(n: Decimal | number): string {
+  return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 @Injectable()
@@ -21,72 +17,47 @@ export class InvestmentsService {
   ) {}
 
   async getMyInvestments(userId: string) {
-    return this.prisma.investment.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-    });
+    return this.prisma.investment.findMany({ where: { userId }, orderBy: { createdAt: 'desc' } });
   }
 
   async createInvestment(userId: string, dto: CreateInvestmentDto) {
-    const principal = new Decimal(dto.principalAmount);
+    const principal = new Decimal(dto.principalAmount.toFixed(2));
 
-    if (dto.principalAmount <= 0) {
-      throw new BadRequestException('Investment principal must be greater than 0');
+    const account = await this.prisma.account.findUnique({ where: { id: dto.accountId } });
+    if (!account || account.userId !== userId) throw new NotFoundException('Funding account not found');
+    if (account.isFrozen) throw new BadRequestException('The funding account is frozen');
+
+    const startDate = dto.startDate ? new Date(dto.startDate) : new Date();
+    let maturityDate: Date | null = dto.maturityDate ? new Date(dto.maturityDate) : null;
+    if (!maturityDate && dto.termMonths) {
+      maturityDate = new Date(startDate);
+      maturityDate.setMonth(maturityDate.getMonth() + dto.termMonths);
     }
+    const planName = dto.planName.trim();
 
-    // 1. Fetch and validate account
-    const account = await this.prisma.account.findUnique({
-      where: { id: dto.accountId },
-    });
-    if (!account) throw new NotFoundException('Funding source account not found');
-    if (account.userId !== userId)
-      throw new ForbiddenException('Account does not belong to you');
-    if (account.isFrozen)
-      throw new BadRequestException('Funding source account is frozen');
-    if (account.availableBalance.lessThan(principal)) {
-      throw new BadRequestException('Insufficient funds in the selected account');
-    }
-
-    const txRef = 'TXN-' + Date.now() + '-' + Math.floor(Math.random() * 10000);
-
-    // 2. Perform transaction to deduct balance and create investment + ledger records
-    const result = await this.prisma.$transaction(async (tx) => {
-      // Deduct from bank account
-      await tx.account.update({
-        where: { id: dto.accountId },
-        data: {
-          balance: { decrement: principal },
-          availableBalance: { decrement: principal },
-        },
+    const investment = await this.prisma.$transaction(async (tx) => {
+      const debited = await tx.account.updateMany({
+        where: { id: account.id, isFrozen: false, availableBalance: { gte: principal } },
+        data: { balance: { decrement: principal }, availableBalance: { decrement: principal } },
       });
+      if (debited.count !== 1) throw new BadRequestException('Insufficient funds in the selected account');
 
-      // Create investment record
-      const startDate = dto.startDate ? new Date(dto.startDate) : new Date();
-      let maturityDate: Date | null = null;
-      if (dto.maturityDate) {
-        maturityDate = new Date(dto.maturityDate);
-      } else if (dto.termMonths) {
-        maturityDate = new Date(startDate);
-        maturityDate.setMonth(maturityDate.getMonth() + dto.termMonths);
-      }
-
-      const investment = await tx.investment.create({
+      const created = await tx.investment.create({
         data: {
           userId,
-          planName: dto.planName,
+          planName,
           principalAmount: principal,
           currentValue: principal,
-          interestRate: dto.interestRate ? new Decimal(dto.interestRate) : null,
+          interestRate: dto.interestRate !== undefined ? new Decimal(dto.interestRate) : null,
           startDate,
           maturityDate,
           status: 'active',
         },
       });
 
-      // Create ledger transaction record
       await tx.transaction.create({
         data: {
-          transactionReference: txRef,
+          transactionReference: newReference('INV'),
           senderAccountId: account.id,
           receiverAccountId: null,
           amount: principal,
@@ -94,73 +65,60 @@ export class InvestmentsService {
           currency: account.currency,
           status: 'completed',
           type: 'investment',
-          description: `Investment Capital: ${dto.planName}`,
+          description: `Investment in ${planName}`,
         },
       });
 
-      return investment;
+      return created;
     });
 
     try {
-      const formattedAmount = `$${dto.principalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
       await this.notificationsService.createNotification(
         userId,
-        'Investment Portfolio Opened',
-        `Successfully invested ${formattedAmount} from account ${account.accountNumber} into "${dto.planName}". Maturity date: ${dto.maturityDate ? new Date(dto.maturityDate).toLocaleDateString() : 'N/A'}.`,
+        'Investment opened',
+        `$${money(principal)} from ${account.accountNumber} was invested in "${planName}".${
+          maturityDate ? ` Matures ${maturityDate.toLocaleDateString('en-US', { dateStyle: 'medium' })}.` : ''
+        }`,
         'success',
       );
     } catch (err) {
       console.error('Failed to trigger investment notification:', err);
     }
 
-    return result;
+    return investment;
   }
 
   async closeInvestment(userId: string, investmentId: string) {
-    const investment = await this.prisma.investment.findUnique({
-      where: { id: investmentId },
-    });
-    if (!investment) throw new NotFoundException('Investment not found');
-    if (investment.userId !== userId)
-      throw new ForbiddenException('Investment does not belong to you');
-    if (investment.status !== 'active')
-      throw new BadRequestException('Investment is already closed or inactive');
-
-    // Find first active checking or savings account of the user to receive the funds
-    const userAccount = await this.prisma.account.findFirst({
-      where: { userId, isFrozen: false },
-      orderBy: { accountType: 'asc' }, // checking usually comes before savings alphabetically
-    });
-    if (!userAccount) {
-      throw new BadRequestException('No active bank account found to receive the payout');
+    const investment = await this.prisma.investment.findUnique({ where: { id: investmentId } });
+    if (!investment || investment.userId !== userId) throw new NotFoundException('Investment not found');
+    if (investment.status !== 'active' && investment.status !== 'matured') {
+      throw new BadRequestException('This investment is already closed');
     }
 
+    const userAccount = await this.prisma.account.findFirst({
+      where: { userId, isFrozen: false },
+      orderBy: { accountType: 'asc' }, // checking before savings
+    });
+    if (!userAccount) throw new BadRequestException('No active account is available to receive the payout');
+
     const payoutAmount = investment.currentValue || investment.principalAmount;
-    const txRef = 'TXN-' + Date.now() + '-' + Math.floor(Math.random() * 10000);
 
     const result = await this.prisma.$transaction(async (tx) => {
-      // Credit bank account
+      // Guarded state change — prevents paying out the same investment twice.
+      const closed = await tx.investment.updateMany({
+        where: { id: investmentId, status: { in: ['active', 'matured'] } },
+        data: { status: 'closed' },
+      });
+      if (closed.count !== 1) throw new BadRequestException('This investment is already closed');
+
       await tx.account.update({
         where: { id: userAccount.id },
-        data: {
-          balance: { increment: payoutAmount },
-          availableBalance: { increment: payoutAmount },
-        },
+        data: { balance: { increment: payoutAmount }, availableBalance: { increment: payoutAmount } },
       });
 
-      // Update investment status to closed
-      const updatedInvestment = await tx.investment.update({
-        where: { id: investmentId },
-        data: {
-          status: 'closed',
-          updatedAt: new Date(),
-        },
-      });
-
-      // Create ledger credit transaction
       await tx.transaction.create({
         data: {
-          transactionReference: txRef,
+          transactionReference: newReference('INV'),
           senderAccountId: null,
           receiverAccountId: userAccount.id,
           amount: payoutAmount,
@@ -168,19 +126,18 @@ export class InvestmentsService {
           currency: userAccount.currency,
           status: 'completed',
           type: 'credit',
-          description: `Investment Liquidated: ${investment.planName}`,
+          description: `Investment closed: ${investment.planName}`,
         },
       });
 
-      return updatedInvestment;
+      return tx.investment.findUnique({ where: { id: investmentId } });
     });
 
     try {
-      const formattedAmount = `$${Number(payoutAmount).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
       await this.notificationsService.createNotification(
         userId,
-        'Investment Liquidated',
-        `Successfully closed your investment "${investment.planName}". Payout of ${formattedAmount} credited to account ${userAccount.accountNumber}.`,
+        'Investment closed',
+        `"${investment.planName}" was closed and $${money(payoutAmount)} was paid into ${userAccount.accountNumber}.`,
         'success',
       );
     } catch (err) {
@@ -190,7 +147,7 @@ export class InvestmentsService {
     return result;
   }
 
-  async getAllInvestments(page: number = 1, limit: number = 20, status?: string) {
+  async getAllInvestments(page = 1, limit = 20, status?: string) {
     const skip = (page - 1) * limit;
     const whereClause: any = {};
     if (status) whereClause.status = status;
@@ -200,40 +157,37 @@ export class InvestmentsService {
         where: whereClause,
         skip,
         take: limit,
-        include: {
-          user: { select: { id: true, fullName: true, email: true } },
-        },
+        include: { user: { select: { id: true, fullName: true, email: true } } },
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.investment.count({ where: whereClause }),
     ]);
 
-    return {
-      investments,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+    return { investments, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
-  async updateInvestmentValue(
-    investmentId: string,
-    currentValue: number,
-    status?: string,
-  ) {
-    const investment = await this.prisma.investment.findUnique({
-      where: { id: investmentId },
-    });
+  /** Admin mark-to-market of a simulated investment. Audited. */
+  async updateInvestmentValue(investmentId: string, currentValue: number, status: string | undefined, adminId: string) {
+    const investment = await this.prisma.investment.findUnique({ where: { id: investmentId } });
     if (!investment) throw new NotFoundException('Investment not found');
+    if (investment.status === 'closed') throw new BadRequestException('Closed investments cannot be revalued');
 
-    return this.prisma.investment.update({
+    const updated = await this.prisma.investment.update({
       where: { id: investmentId },
+      data: { currentValue: new Decimal(currentValue.toFixed(2)), ...(status ? { status } : {}) },
+    });
+
+    await this.prisma.auditLog.create({
       data: {
-        currentValue: new Decimal(currentValue),
-        ...(status && { status }),
-        updatedAt: new Date(),
+        userId: adminId,
+        action: 'UPDATE_INVESTMENT_VALUE',
+        entityType: 'Investment',
+        entityId: investmentId,
+        oldValues: JSON.stringify({ currentValue: Number(investment.currentValue), status: investment.status }),
+        newValues: JSON.stringify({ currentValue, status: updated.status }),
       },
     });
+
+    return updated;
   }
 }

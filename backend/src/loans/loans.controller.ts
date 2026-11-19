@@ -1,19 +1,13 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-  Req,
-  Patch,
-} from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseGuards, Req, Patch, ParseUUIDPipe } from '@nestjs/common';
 import { LoansService } from './loans.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { ADMIN_ROLES, Roles } from '../auth/roles.decorator';
+import { ApplyLoanDto } from './dto/apply-loan.dto';
+import { clampInt } from '../common/pagination';
 
 @Controller('loans')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class LoansController {
   constructor(private readonly loansService: LoansService) {}
 
@@ -23,27 +17,26 @@ export class LoansController {
   }
 
   @Post('apply')
-  async applyForLoan(@Req() req: any, @Body() dto: any) {
+  async applyForLoan(@Req() req: any, @Body() dto: ApplyLoanDto) {
     return this.loansService.applyForLoan(req.user.id, dto);
   }
 
-  // Admin routes
+  // ── Admin ────────────────────────────────────────────────────────────────
   @Get('admin/all')
-  async getAllLoans(
-    @Query('page') page: string = '1',
-    @Query('limit') limit: string = '20',
-    @Query('status') status?: string,
-  ) {
-    return this.loansService.getAllLoans(parseInt(page), parseInt(limit), status);
+  @Roles(...ADMIN_ROLES)
+  async getAllLoans(@Query('page') page?: string, @Query('limit') limit?: string, @Query('status') status?: string) {
+    return this.loansService.getAllLoans(clampInt(page, 1, 1, 10_000), clampInt(limit, 20, 1, 200), status);
   }
 
   @Patch('admin/:id/approve')
-  async approveLoan(@Param('id') id: string, @Req() req: any) {
+  @Roles(...ADMIN_ROLES)
+  async approveLoan(@Param('id', new ParseUUIDPipe()) id: string, @Req() req: any) {
     return this.loansService.approveLoan(id, req.user.id);
   }
 
   @Patch('admin/:id/reject')
-  async rejectLoan(@Param('id') id: string, @Req() req: any) {
+  @Roles(...ADMIN_ROLES)
+  async rejectLoan(@Param('id', new ParseUUIDPipe()) id: string, @Req() req: any) {
     return this.loansService.rejectLoan(id, req.user.id);
   }
 }

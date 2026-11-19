@@ -5,25 +5,25 @@ import { UsersModule } from '../users/users.module';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
 import { JwtStrategy } from './jwt.strategy';
+import { RolesGuard } from './guards/roles.guard';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ACCESS_TOKEN_TTL, getAccessSecret } from './jwt.config';
 
 @Module({
   imports: [
     UsersModule,
     NotificationsModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
-    // Use registerAsync so JWT_SECRET is read at request-handler time,
-    // not at module-load time. On Vercel, env vars are available at runtime
-    // but may not yet be populated when the module is first imported.
+    // registerAsync so the secret is resolved at runtime (Vercel populates env vars at invocation).
     JwtModule.registerAsync({
       useFactory: () => ({
-        secret: process.env.JWT_SECRET,
-        signOptions: { expiresIn: '8h' },
+        secret: getAccessSecret(),
+        signOptions: { expiresIn: ACCESS_TOKEN_TTL },
       }),
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy],
-  exports: [AuthService, JwtStrategy, PassportModule],
+  providers: [AuthService, JwtStrategy, RolesGuard],
+  exports: [AuthService, JwtStrategy, PassportModule, RolesGuard, JwtModule],
 })
 export class AuthModule {}

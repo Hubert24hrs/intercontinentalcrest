@@ -1,860 +1,358 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import {
-  Coins, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownLeft,
-  DollarSign, Wallet, RefreshCw, Star, Info, ChevronRight,
-  CheckCircle2, AlertTriangle, Eye, EyeOff, Loader2, ArrowRight,
-  Copy, Check
-} from "lucide-react";
-import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid
-} from "recharts";
-import { cryptoApi, accountsApi, walletsApi } from "@/lib/api";
+import { useState } from "react";
+import Image from "next/image";
+import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { ArrowDownRight, ArrowUpRight, Bitcoin, Search } from "lucide-react";
+import { accountsApi, cryptoApi } from "@/lib/api";
+import { useAsync } from "@/lib/useAsync";
+import { accountLabel, formatCrypto, formatDateTime, formatMoney, formatPercent, formatPrice, maskAccount, toNumber } from "@/lib/format";
+import { Card, CardHeader } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Field";
+import { Alert } from "@/components/ui/Alert";
+import { Badge } from "@/components/ui/Badge";
+import { EmptyState, PageHeader, Segmented, Skeleton, StatCard } from "@/components/ui/misc";
+import { refreshNotifications } from "@/components/app/NotificationsMenu";
+import { cn } from "@/lib/cn";
+import { pickAccount } from "@/lib/url";
 
-export default function CryptoMarketplacePage() {
-  // Live market and portfolio state
-  const [markets, setMarkets] = useState<any[]>([]);
-  const [portfolio, setPortfolio] = useState<{ holdings: any[]; orders: any[] }>({ holdings: [], orders: [] });
-  const [accounts, setAccounts] = useState<any[]>([]);
-  
-  // Loading and refreshing states
-  const [loading, setLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
-  
-  // Chart and detail coin state
-  const [selectedCoinId, setSelectedCoinId] = useState("bitcoin");
-  const [selectedCoinDetail, setSelectedCoinDetail] = useState<any>(null);
-  const [chartData, setChartData] = useState<any[]>([]);
-  const [chartDays, setChartDays] = useState(7);
-  const [loadingChart, setLoadingChart] = useState(false);
+const FEE = 0.005;
+const RANGES = [
+  { value: "1", label: "24H" },
+  { value: "7", label: "7D" },
+  { value: "30", label: "1M" },
+  { value: "90", label: "3M" },
+];
 
-  // Crypto wallet addresses
-  const [wallets, setWallets] = useState<any[]>([]);
-  const [selectedWalletId, setSelectedWalletId] = useState<string>("");
-  const [addressCopied, setAddressCopied] = useState(false);
+export default function CryptoPage() {
+  const { data, loading, reload } = useAsync(async () => {
+    const [markets, portfolio, accounts] = await Promise.all([cryptoApi.getMarkets(), cryptoApi.getPortfolio(), accountsApi.getAccounts()]);
+    return { markets: markets as any[], holdings: (portfolio as any).holdings as any[], orders: (portfolio as any).orders as any[], accounts: accounts as any[] };
+  });
 
-  // Trade form state
-  const [tradeType, setTradeType] = useState<"buy" | "sell">("buy");
-  const [selectedTradeCoin, setSelectedTradeCoin] = useState<any>(null);
-  const [usdAmount, setUsdAmount] = useState<string>("");
-  const [coinQuantity, setCoinQuantity] = useState<string>("");
-  const [selectedAccountId, setSelectedAccountId] = useState<string>("");
-  const [isTrading, setIsTrading] = useState(false);
-  const [tradeSuccess, setTradeSuccess] = useState<string | null>(null);
-  const [tradeError, setTradeError] = useState<string | null>(null);
+  const [coinId, setCoinId] = useState("bitcoin");
+  const [range, setRange] = useState("7");
+  const [search, setSearch] = useState("");
+  const [side, setSide] = useState<"buy" | "sell">("buy");
+  const [usd, setUsd] = useState("");
+  const [qty, setQty] = useState("");
+  const [accountId, setAccountId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ tone: "success" | "danger"; text: string } | null>(null);
 
-  // Load initial data — markets load first so the page is never blank
-  useEffect(() => {
-    async function initData() {
-      try {
-        const marketList = await cryptoApi.getMarkets();
-        setMarkets(marketList);
+  const markets = data?.markets ?? [];
+  const holdings = data?.holdings ?? [];
+  const accounts = data?.accounts ?? [];
+  const coin = markets.find((m) => m.id === coinId) || markets[0];
+  const holding = holdings.find((h) => h.coinId === coin?.id);
+  const account = pickAccount(accounts, accountId);
 
-        if (marketList && marketList.length > 0) {
-          const defaultCoin = marketList.find((c: any) => c.id === "bitcoin") || marketList[0];
-          setSelectedTradeCoin(defaultCoin);
-          setSelectedCoinId(defaultCoin.id);
-        }
-      } catch (err) {
-        console.error("Failed to load market data", err);
-      } finally {
-        setLoading(false);
-      }
+  const chart = useAsync(
+    async () => {
+      if (!coin?.id) return [];
+      const res: any = await cryptoApi.getHistoricalChart(coin.id, Number(range));
+      const prices: [number, number][] = res?.prices || [];
+      const step = Math.max(1, Math.floor(prices.length / 120));
+      return prices.filter((_, i) => i % step === 0).map(([t, p]) => ({ t, p }));
+    },
+    [coin?.id, range],
+  );
 
-      // Load user portfolio, accounts and wallets separately — failure here won't blank markets
-      try {
-        const [portfolioData, userAccounts, userWallets] = await Promise.all([
-          cryptoApi.getPortfolio(),
-          accountsApi.getAccounts(),
-          walletsApi.getWallets(),
-        ]);
-        setPortfolio(portfolioData);
-        setAccounts(userAccounts);
-        setWallets(userWallets);
-        if (userAccounts && userAccounts.length > 0) {
-          setSelectedAccountId(userAccounts[0].id);
-        }
-        if (userWallets && userWallets.length > 0) {
-          setSelectedWalletId(userWallets[0].id);
-        }
-      } catch (err) {
-        console.error("Failed to load portfolio/accounts/wallets", err);
-      }
-    }
-    initData();
-  }, []);
+  let pValue = 0;
+  let pCost = 0;
+  for (const h of holdings) {
+    const m = markets.find((x) => x.id === h.coinId);
+    pValue += toNumber(h.quantity) * toNumber(m?.current_price);
+    pCost += toNumber(h.quantity) * toNumber(h.avgBuyPrice);
+  }
+  const portfolio = { value: pValue, cost: pCost, pnl: pValue - pCost };
 
-  // Fetch live market prices periodically (every 30 seconds)
-  useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const marketList = await cryptoApi.getMarkets();
-        setMarkets(marketList);
-      } catch (err) {
-        console.error("Failed to refresh markets in background", err);
-      }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, []);
+  const filtered = markets.filter((m) => !search || `${m.name} ${m.symbol}`.toLowerCase().includes(search.toLowerCase()));
+  const price = toNumber(coin?.current_price);
+  const buyAmt = toNumber(usd);
+  const sellQty = toNumber(qty);
+  const buyQtyEst = price ? (buyAmt * (1 - FEE)) / price : 0;
+  const sellNetEst = sellQty * price * (1 - FEE);
 
-  // Load coin details and chart data whenever coinId or chartDays changes
-  useEffect(() => {
-    if (!selectedCoinId) return;
-
-    async function loadChartAndDetails() {
-      setLoadingChart(true);
-      try {
-        const [detail, chart] = await Promise.all([
-          cryptoApi.getCoinDetail(selectedCoinId),
-          cryptoApi.getHistoricalChart(selectedCoinId, chartDays)
-        ]);
-
-        setSelectedCoinDetail(detail);
-
-        // Format historical chart data for Recharts
-        if (chart && chart.prices) {
-          const formatted = chart.prices.map(([timestamp, price]: [number, number]) => {
-            const date = new Date(timestamp);
-            return {
-              name: date.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
-              price: price != null ? parseFloat(price.toFixed(2)) : 0
-            };
-          });
-          setChartData(formatted);
-        }
-      } catch (err) {
-        console.error(`Failed to load details for ${selectedCoinId}`, err);
-      } finally {
-        setLoadingChart(false);
-      }
-    }
-    loadChartAndDetails();
-  }, [selectedCoinId, chartDays]);
-
-  // Sync trade coin selection when clicking from market list
-  const handleSelectCoin = (coin: any) => {
-    setSelectedCoinId(coin.id);
-    setSelectedTradeCoin(coin);
-    setTradeSuccess(null);
-    setTradeError(null);
-  };
-
-  // Manual refresh button action
-  const handleManualRefresh = async () => {
-    setRefreshing(true);
-    try {
-      const marketList = await cryptoApi.getMarkets();
-      setMarkets(marketList);
-      setTradeSuccess("Market prices updated!");
-      setTimeout(() => setTradeSuccess(null), 3000);
-    } catch {
-      setTradeError("Failed to refresh market data");
-      setTimeout(() => setTradeError(null), 3000);
-    } finally {
-      setRefreshing(false);
-    }
-    try {
-      const [portfolioData, userAccounts, userWallets] = await Promise.all([
-        cryptoApi.getPortfolio(),
-        accountsApi.getAccounts(),
-        walletsApi.getWallets(),
-      ]);
-      setPortfolio(portfolioData);
-      setAccounts(userAccounts);
-      setWallets(userWallets);
-    } catch {
-      // Portfolio refresh failure is non-fatal; markets are already updated
-    }
-  };
-
-  // Calculate user total portfolio value
-  const portfolioStats = useMemo(() => {
-    if (!portfolio.holdings || markets.length === 0) {
-      return { totalValue: 0, totalProfitLoss: 0, totalProfitLossPercentage: 0 };
-    }
-
-    let totalValue = 0;
-    let totalCost = 0;
-
-    portfolio.holdings.forEach((holding: any) => {
-      const liveCoin = markets.find((m: any) => m.id === holding.coinId);
-      const currentPrice = (liveCoin && liveCoin.current_price != null) ? liveCoin.current_price : parseFloat(holding.avgBuyPrice);
-      const qty = parseFloat(holding.quantity);
-      const avgPrice = parseFloat(holding.avgBuyPrice);
-
-      totalValue += qty * currentPrice;
-      totalCost += qty * avgPrice;
-    });
-
-    const totalProfitLoss = totalValue - totalCost;
-    const totalProfitLossPercentage = totalCost > 0 ? (totalProfitLoss / totalCost) * 100 : 0;
-
-    return {
-      totalValue,
-      totalProfitLoss,
-      totalProfitLossPercentage
-    };
-  }, [portfolio.holdings, markets]);
-
-  // Execute buy or sell order
-  const handleExecuteTrade = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedTradeCoin || !selectedAccountId) return;
-
-    setIsTrading(true);
-    setTradeSuccess(null);
-    setTradeError(null);
-
-    try {
-      if (tradeType === "buy") {
-        const val = parseFloat(usdAmount);
-        if (isNaN(val) || val <= 0) {
-          throw new Error("Enter a valid purchase amount");
-        }
-
-        const res = await cryptoApi.buyCrypto({
-          coinId: selectedTradeCoin.id,
-          coinSymbol: selectedTradeCoin.symbol,
-          coinName: selectedTradeCoin.name,
-          usdAmount: val,
-          fromAccountId: selectedAccountId
-        });
-
-        setTradeSuccess(res.message || "Crypto purchased successfully!");
-        setUsdAmount("");
-      } else {
-        const qty = parseFloat(coinQuantity);
-        if (isNaN(qty) || qty <= 0) {
-          throw new Error("Enter a valid sale quantity");
-        }
-
-        const res = await cryptoApi.sellCrypto({
-          coinId: selectedTradeCoin.id,
-          coinSymbol: selectedTradeCoin.symbol,
-          coinName: selectedTradeCoin.name,
-          quantity: qty,
-          toAccountId: selectedAccountId
-        });
-
-        setTradeSuccess(res.message || "Crypto sold successfully!");
-        setCoinQuantity("");
-      }
-
-      // Refresh portfolio, balance accounts
-      const [portfolioData, userAccounts] = await Promise.all([
-        cryptoApi.getPortfolio(),
-        accountsApi.getAccounts()
-      ]);
-      setPortfolio(portfolioData);
-      setAccounts(userAccounts);
-    } catch (err: any) {
-      setTradeError(err.message || "Trade execution failed");
-    } finally {
-      setIsTrading(false);
-    }
-  };
-
-  // Find user holding for selected trade coin
-  const activeTradeCoinHolding = useMemo(() => {
-    if (!selectedTradeCoin || !portfolio.holdings) return 0;
-    const h = portfolio.holdings.find((holding: any) => holding.coinId === selectedTradeCoin.id);
-    return h ? parseFloat(h.quantity) : 0;
-  }, [selectedTradeCoin, portfolio.holdings]);
-
-  // Find chosen bank account balance
-  const activeBankAccountBalance = useMemo(() => {
-    if (!selectedAccountId || !accounts) return 0;
-    const acc = accounts.find((a: any) => a.id === selectedAccountId);
-    return acc ? parseFloat(acc.availableBalance) : 0;
-  }, [selectedAccountId, accounts]);
-
-  // Crypto wallets: real holdings if any, else placeholder wallets with zero balance
-  const cryptoWallets = useMemo(() => {
-    if (portfolio.holdings && portfolio.holdings.length > 0) {
-      return portfolio.holdings.map((h: any) => {
-        const coin = markets.find((m: any) => m.id === h.coinId);
-        const price = (coin && coin.current_price != null) ? coin.current_price : parseFloat(h.avgBuyPrice);
-        const qty = parseFloat(h.quantity);
-        return {
-          id: h.coinId,
-          symbol: (h.coinSymbol || "").toUpperCase(),
-          name: h.coinName || h.coinSymbol,
-          quantity: qty,
-          valueUsd: qty * price,
-          image: coin?.image,
-        };
-      });
-    }
-    return [
-      { id: "btc-wallet",  symbol: "BTC",  name: "Bitcoin",  quantity: 0, valueUsd: 0, image: undefined },
-      { id: "eth-wallet",  symbol: "ETH",  name: "Ethereum", quantity: 0, valueUsd: 0, image: undefined },
-      { id: "sol-wallet",  symbol: "SOL",  name: "Solana",   quantity: 0, valueUsd: 0, image: undefined },
-      { id: "usdt-wallet", symbol: "USDT", name: "Tether",   quantity: 0, valueUsd: 0, image: undefined },
-    ];
-  }, [portfolio.holdings, markets]);
-
-  // Auto-select first wallet when list changes (e.g., after holdings load)
-  useEffect(() => {
-    if (cryptoWallets.length > 0) {
-      const exists = cryptoWallets.some((w) => w.id === selectedWalletId);
-      if (!exists) setSelectedWalletId(cryptoWallets[0].id);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cryptoWallets]);
-
-  const selectedWallet = cryptoWallets.find((w) => w.id === selectedWalletId) ?? cryptoWallets[0] ?? null;
-
-  // Estimate trade Net and Fee values
-  const tradeEstimates = useMemo(() => {
-    if (!selectedTradeCoin) return { subtotal: 0, fee: 0, total: 0 };
-    
-    if (tradeType === "buy") {
-      const val = parseFloat(usdAmount) || 0;
-      const fee = val * 0.005; // 0.5%
-      const net = val - fee;
-      const coins = (val > 0 && selectedTradeCoin?.current_price) ? net / selectedTradeCoin.current_price : 0;
-      return {
-        subtotal: val,
-        fee,
-        total: net,
-        coinsEst: coins
-      };
+  const problem = (() => {
+    if (!coin || !account) return "Choose an account";
+    if (side === "buy") {
+      if (!(buyAmt >= 1)) return "The minimum purchase is $1";
+      if (buyAmt > toNumber(account.availableBalance)) return `You have ${formatMoney(account.availableBalance)} available`;
     } else {
-      const qty = parseFloat(coinQuantity) || 0;
-      const gross = qty * (selectedTradeCoin?.current_price || 0);
-      const fee = gross * 0.005;
-      const net = gross - fee;
-      return {
-        subtotal: gross,
-        fee,
-        total: net,
-        coinsEst: qty
-      };
+      if (!holding) return `You don't hold any ${coin.symbol.toUpperCase()}`;
+      if (!(sellQty > 0)) return "Enter a quantity";
+      if (sellQty > toNumber(holding.quantity)) return `You hold ${formatCrypto(holding.quantity, coin.symbol)}`;
     }
-  }, [tradeType, selectedTradeCoin, usdAmount, coinQuantity]);
+    return null;
+  })();
 
-  // Find currently selected coin details from market list
-  const currentCoinMarket = markets.find((c: any) => c.id === selectedCoinId) || markets[0];
+  async function trade(e: React.FormEvent) {
+    e.preventDefault();
+    if (problem || !coin || !account) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res: any =
+        side === "buy"
+          ? await cryptoApi.buyCrypto({ coinId: coin.id, usdAmount: Math.round(buyAmt * 100) / 100, fromAccountId: account.id })
+          : await cryptoApi.sellCrypto({ coinId: coin.id, quantity: Math.floor(sellQty * 1e8) / 1e8, toAccountId: account.id });
+      setMsg({ tone: "success", text: res.message || "Order completed" });
+      setUsd("");
+      setQty("");
+      refreshNotifications();
+      reload({ silent: true });
+    } catch (err: any) {
+      setMsg({ tone: "danger", text: err.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const pct = toNumber(coin?.price_change_percentage_24h);
 
   return (
-    <div className="space-y-6">
-      {/* Title Bar */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <h1 className="font-display font-bold text-brand-secondary text-2xl flex items-center gap-2">
-            <Coins className="w-6 h-6 text-brand-primary" />
-            Digital Asset Marketplace
-          </h1>
-          <p className="text-gray-500 text-sm mt-0.5">
-            Real-time cryptocurrency trade desk funded by your banking deposits.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleManualRefresh}
-            disabled={refreshing}
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-semibold hover:border-brand-primary hover:text-brand-primary transition-all disabled:opacity-50"
-          >
-            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
-            Refresh Markets
-          </button>
-        </div>
+    <div>
+      <PageHeader title="Crypto" description="Trade major assets at live prices. A 0.5% fee applies to each trade." />
+
+      <div className="mb-6 grid gap-4 sm:grid-cols-3">
+        <StatCard label="Crypto holdings" value={formatMoney(portfolio.value)} icon={<Bitcoin className="size-4" />} tone="gold" />
+        <StatCard label="Cost basis" value={formatMoney(portfolio.cost)} tone="ink" />
+        <StatCard
+          label="Unrealised gain / loss"
+          value={<span className={portfolio.pnl >= 0 ? "text-success-600" : "text-danger-600"}>{formatMoney(portfolio.pnl, { sign: true })}</span>}
+          sub={portfolio.cost > 0 ? formatPercent((portfolio.pnl / portfolio.cost) * 100) : undefined}
+          tone="brand"
+        />
       </div>
 
-      {/* Portfolio overview blocks */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-brand-secondary rounded-2xl p-6 text-white shadow-xl relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-32 h-32 bg-white/5 rounded-full -translate-y-8 translate-x-8" />
-          <p className="text-white/60 text-xs font-semibold uppercase tracking-wider">Asset Holding Value</p>
-          <h2 className="text-3xl font-display font-bold mt-2">
-            ${portfolioStats.totalValue.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-          </h2>
-          <div className="flex items-center gap-1.5 mt-3 text-xs">
-            <div className="w-6 h-6 rounded-full bg-white/10 flex items-center justify-center">
-              <Wallet className="w-3.5 h-3.5 text-brand-primary" />
-            </div>
-            <span className="text-white/80">Stored in secure custodial vaults</span>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm">
-          <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Unrealized Growth (Net)</p>
-          <div className="flex items-baseline gap-2 mt-2">
-            <h2 className={`text-3xl font-display font-bold ${portfolioStats.totalProfitLoss >= 0 ? "text-green-600" : "text-red-600"}`}>
-              {portfolioStats.totalProfitLoss >= 0 ? "+" : ""}
-              ${portfolioStats.totalProfitLoss.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </h2>
-            <span className={`text-sm font-bold flex items-center gap-0.5 ${portfolioStats.totalProfitLoss >= 0 ? "text-green-500" : "text-red-500"}`}>
-              {portfolioStats.totalProfitLoss >= 0 ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownLeft className="w-4 h-4" />}
-              {portfolioStats.totalProfitLossPercentage.toFixed(2)}%
-            </span>
-          </div>
-          <p className="text-xs text-gray-400 mt-3">Calculated relative to weighted buy history</p>
-        </div>
-
-        <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm flex flex-col justify-between">
-          <div>
-            <p className="text-gray-500 text-xs font-semibold uppercase tracking-wider">Trading Account balance</p>
-            <h2 className="text-3xl font-display font-bold mt-2 text-brand-secondary">
-              ${(selectedWallet?.valueUsd ?? 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
-            </h2>
-            {selectedWallet && selectedWallet.quantity > 0 && (
-              <p className="text-xs text-gray-400 mt-1 font-mono">
-                {selectedWallet.quantity.toFixed(6)} {selectedWallet.symbol}
-              </p>
-            )}
-          </div>
-          <div className="mt-3 flex items-center justify-between text-xs border-t border-gray-50 pt-2.5">
-            <span className="text-gray-400">Crypto Wallet</span>
-            <select
-              value={selectedWalletId}
-              onChange={(e) => setSelectedWalletId(e.target.value)}
-              className="bg-gray-50 border border-gray-200 text-gray-700 rounded-lg px-2.5 py-1 font-semibold text-xs outline-none focus:border-brand-primary"
-            >
-              {cryptoWallets.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name} ({w.symbol}){w.quantity > 0 ? ` — ${w.quantity.toFixed(4)} ${w.symbol}` : " — $0.00"}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Trade Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Live Coin List */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden flex flex-col h-[640px]">
-          <div className="p-4 border-b border-gray-100">
-            <h3 className="font-display font-bold text-brand-secondary text-sm">Supported Cryptocurrencies</h3>
-            <p className="text-xs text-gray-400 mt-0.5">Click any asset to analyze or set up trades.</p>
-          </div>
-          <div className="flex-1 overflow-y-auto divide-y divide-gray-50">
-            {markets.map((coin: any) => {
-              const selected = coin.id === selectedCoinId;
-              const isUp = coin.price_change_percentage_24h >= 0;
-              return (
-                <button
-                  key={coin.id}
-                  onClick={() => handleSelectCoin(coin)}
-                  className={`w-full text-left p-3.5 flex items-center justify-between transition-all outline-none ${
-                    selected ? "bg-brand-primary/5 border-l-4 border-brand-primary" : "hover:bg-gray-50"
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <img src={coin.image} alt={coin.name} className="w-8 h-8 rounded-full" onError={(e) => { const t = e.target as HTMLImageElement; t.onerror = null; t.src = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='16' fill='%23e2e8f0'/%3E%3Ctext x='16' y='21' text-anchor='middle' font-size='12' fill='%2364748b'%3E${encodeURIComponent(coin.symbol?.charAt(0)?.toUpperCase() || '?')}%3C/text%3E%3C/svg%3E`; }} />
-                    <div>
-                      <div className="font-bold text-sm text-brand-secondary flex items-center gap-1.5">
-                        {coin.name}
-                        <span className="text-[10px] text-gray-400 font-mono font-normal uppercase">{coin.symbol}</span>
-                      </div>
-                      <div className="text-[10px] text-gray-500 font-mono mt-0.5">
-                        Vol: ${coin.total_volume != null ? (coin.total_volume / 1e6).toFixed(1) + "M" : "-"}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="font-mono text-sm font-bold text-brand-secondary">
-                      ${coin.current_price != null
-                        ? coin.current_price >= 1
-                          ? coin.current_price.toLocaleString("en-US", { minimumFractionDigits: 2 })
-                          : coin.current_price.toFixed(4)
-                        : "0.00"}
-                    </div>
-                    <div className={`text-xs font-semibold flex items-center justify-end gap-0.5 ${isUp ? "text-green-500" : "text-red-500"}`}>
-                      {isUp ? <ArrowUpRight className="w-3.5 h-3.5" /> : <ArrowDownLeft className="w-3.5 h-3.5" />}
-                      {coin.price_change_percentage_24h != null ? coin.price_change_percentage_24h.toFixed(2) + "%" : "0.00%"}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Center Column: Live Chart & Analytics */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-6 lg:col-span-2 flex flex-col justify-between h-[640px]">
-          {/* Chart Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-2 border-b border-gray-50">
-            <div className="flex items-center gap-3">
-              {currentCoinMarket && (
-                <>
-                  <img src={currentCoinMarket.image} alt={currentCoinMarket.name} className="w-10 h-10 rounded-full" />
-                  <div>
-                    <h3 className="font-display font-bold text-brand-secondary text-base flex items-baseline gap-1.5">
-                      {currentCoinMarket.name}
-                      <span className="text-xs text-gray-400 font-mono font-normal uppercase">({currentCoinMarket.symbol}/USD)</span>
-                    </h3>
-                    <p className="text-gray-500 text-xs font-semibold font-mono flex items-center gap-1.5 mt-0.5">
-                      ${currentCoinMarket?.current_price != null ? currentCoinMarket.current_price.toLocaleString("en-US", { minimumFractionDigits: 2 }) : "0.00"}
-                      <span className={currentCoinMarket?.price_change_percentage_24h != null ? (currentCoinMarket.price_change_percentage_24h >= 0 ? "text-green-500" : "text-red-500") : "text-gray-400"}>
-                        ({currentCoinMarket?.price_change_percentage_24h != null ? (currentCoinMarket.price_change_percentage_24h >= 0 ? "+" : "") + currentCoinMarket.price_change_percentage_24h.toFixed(2) : "0.00"}%)
-                      </span>
-                    </p>
-                  </div>
-                </>
-              )}
-            </div>
-
-            {/* Timeframe selector */}
-            <div className="flex bg-gray-100 p-1 rounded-xl self-start">
-              {[
-                { label: "24 Hours", value: 1 },
-                { label: "7 Days", value: 7 },
-                { label: "30 Days", value: 30 }
-              ].map((t) => (
-                <button
-                  key={t.value}
-                  onClick={() => setChartDays(t.value)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                    chartDays === t.value ? "bg-white text-brand-secondary shadow-sm" : "text-gray-400 hover:text-brand-secondary"
-                  }`}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Chart Display */}
-          <div className="flex-1 min-h-[300px] flex items-center justify-center relative">
-            {loadingChart ? (
-              <div className="flex flex-col items-center text-gray-400">
-                <Loader2 className="w-6 h-6 animate-spin text-brand-primary mb-2" />
-                <span className="text-xs">Fetching indices...</span>
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+        <div className="space-y-6">
+          <Card className="overflow-hidden">
+            {loading || !coin ? (
+              <div className="p-6">
+                <Skeleton className="h-8 w-48" />
+                <Skeleton className="mt-6 h-56" />
               </div>
-            ) : chartData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F3F4F6" />
-                  <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#9CA3AF" }} axisLine={false} tickLine={false} />
-                  <YAxis
-                    domain={["auto", "auto"]}
-                    tick={{ fontSize: 10, fill: "#9CA3AF" }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(v) => `$${v.toLocaleString("en-US")}`}
-                  />
-                  <Tooltip
-                    contentStyle={{ background: "#0A2342", border: "none", borderRadius: "12px", color: "#fff", fontSize: "12px" }}
-                    formatter={(val: any) => [`$${val.toLocaleString()}`, "Price"]}
-                  />
-                  <Line
-                    type="monotone"
-                    dataKey="price"
-                    stroke="#00B7F1"
-                    strokeWidth={2.5}
-                    dot={false}
-                    activeDot={{ r: 6, strokeWidth: 0, fill: "#00B7F1" }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
             ) : (
-              <span className="text-xs text-gray-400">Historical data temporarily unavailable</span>
-            )}
-          </div>
-
-          {/* Sparkline Analytics */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 bg-gray-50/50 p-3.5 rounded-2xl border border-gray-100 text-center text-xs">
-            <div>
-              <div className="text-gray-400">24h High</div>
-              <div className="font-mono font-bold text-brand-secondary mt-1">
-                ${currentCoinMarket?.high_24h ? currentCoinMarket.high_24h.toLocaleString("en-US", { minimumFractionDigits: 2 }) : "-"}
-              </div>
-            </div>
-            <div>
-              <div className="text-gray-400">24h Low</div>
-              <div className="font-mono font-bold text-brand-secondary mt-1">
-                ${currentCoinMarket?.low_24h ? currentCoinMarket.low_24h.toLocaleString("en-US", { minimumFractionDigits: 2 }) : "-"}
-              </div>
-            </div>
-            <div>
-              <div className="text-gray-400">Market Rank</div>
-              <div className="font-bold text-brand-secondary mt-1">
-                #{currentCoinMarket?.market_cap_rank || "-"}
-              </div>
-            </div>
-            <div>
-              <div className="text-gray-400">Circulating Supply</div>
-              <div className="font-mono font-bold text-brand-secondary mt-1">
-                {currentCoinMarket?.circulating_supply ? (currentCoinMarket.circulating_supply / 1e6).toFixed(1) + "M" : "-"}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Trade execution form & holdings grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Buy/Sell Order Panel */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 space-y-6 flex flex-col justify-between">
-          <div>
-            <h3 className="font-display font-bold text-brand-secondary text-sm">Create Trade Order</h3>
-            <p className="text-xs text-gray-400 mt-0.5">Fund instant trades using your local balance.</p>
-          </div>
-
-          {/* Notification status banners */}
-          {tradeSuccess && (
-            <div className="bg-green-50 border border-green-200 text-green-700 text-xs rounded-xl p-3.5 flex items-start gap-2.5">
-              <CheckCircle2 className="w-4 h-4 text-green-600 flex-shrink-0 mt-0.5" />
-              <span>{tradeSuccess}</span>
-            </div>
-          )}
-          {tradeError && (
-            <div className="bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl p-3.5 flex items-start gap-2.5">
-              <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0 mt-0.5" />
-              <span>{tradeError}</span>
-            </div>
-          )}
-
-          {/* Trade Type Toggles */}
-          <div className="flex bg-gray-100 p-1 rounded-xl">
-            <button
-              onClick={() => {
-                setTradeType("buy");
-                setTradeSuccess(null);
-                setTradeError(null);
-              }}
-              className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all ${
-                tradeType === "buy" ? "bg-white text-brand-secondary shadow-sm" : "text-gray-400 hover:text-brand-secondary"
-              }`}
-            >
-              BUY ASSETS
-            </button>
-            <button
-              onClick={() => {
-                setTradeType("sell");
-                setTradeSuccess(null);
-                setTradeError(null);
-              }}
-              className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all ${
-                tradeType === "sell" ? "bg-white text-brand-secondary shadow-sm" : "text-gray-400 hover:text-brand-secondary"
-              }`}
-            >
-              SELL ASSETS
-            </button>
-          </div>
-
-          {/* Trade Form */}
-          <form onSubmit={handleExecuteTrade} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1.5">Asset Selected</label>
-              <div className="flex items-center justify-between p-3.5 bg-gray-50 border border-gray-200 rounded-xl">
-                <div className="flex items-center gap-2">
-                  <img src={selectedTradeCoin?.image} alt="" className="w-6 h-6 rounded-full" />
-                  <span className="font-bold text-sm text-brand-secondary">{selectedTradeCoin?.name}</span>
+              <>
+                <div className="flex flex-wrap items-start justify-between gap-4 p-5 sm:p-6">
+                  <div className="flex items-center gap-3">
+                    <Image src={coin.image} alt="" width={40} height={40} className="rounded-full" />
+                    <div>
+                      <p className="font-semibold">
+                        {coin.name} <span className="text-fg-subtle">· {coin.symbol.toUpperCase()}</span>
+                      </p>
+                      <p className="num text-2xl font-semibold tracking-tight">
+                        {formatPrice(price)}{" "}
+                        <span className={cn("text-sm font-medium", pct >= 0 ? "text-success-600" : "text-danger-600")}>
+                          {pct >= 0 ? <ArrowUpRight className="inline size-4" /> : <ArrowDownRight className="inline size-4" />}
+                          {formatPercent(pct)}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+                  <Segmented size="sm" value={range} onChange={setRange} options={RANGES} />
                 </div>
-                <span className="text-xs text-gray-500 font-bold uppercase">{selectedTradeCoin?.symbol}</span>
-              </div>
-            </div>
+                <div className="h-[260px] px-2 pb-4">
+                  {chart.loading ? (
+                    <Skeleton className="mx-4 h-full" />
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={chart.data ?? []} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                        <defs>
+                          <linearGradient id="px" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="#1e998e" stopOpacity={0.28} />
+                            <stop offset="100%" stopColor="#1e998e" stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <XAxis
+                          dataKey="t"
+                          tickLine={false}
+                          axisLine={false}
+                          minTickGap={48}
+                          tick={{ fill: "#667085", fontSize: 11 }}
+                          tickFormatter={(t) => new Date(t).toLocaleDateString("en-US", range === "1" ? { hour: "numeric" } : { month: "short", day: "numeric" })}
+                        />
+                        <YAxis domain={["auto", "auto"]} tickLine={false} axisLine={false} width={72} tick={{ fill: "#667085", fontSize: 11 }} tickFormatter={(v) => formatPrice(v)} />
+                        <Tooltip
+                          labelFormatter={(t) => formatDateTime(new Date(Number(t)))}
+                          formatter={(v: any) => [formatPrice(v), "Price"]}
+                          contentStyle={{ borderRadius: 12, border: "1px solid #e4e7ec", fontSize: 13 }}
+                        />
+                        <Area type="monotone" dataKey="p" stroke="#0e7c74" strokeWidth={2} fill="url(#px)" />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
+              </>
+            )}
+          </Card>
 
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 mb-1.5">Funding Account</label>
-              <select
-                value={selectedAccountId}
-                onChange={(e) => setSelectedAccountId(e.target.value)}
-                className="w-full bg-gray-50 border border-gray-200 text-brand-secondary rounded-xl px-3 py-2.5 font-semibold text-xs outline-none focus:border-brand-primary"
-              >
-                {accounts.map((acc: any) => (
-                  <option key={acc.id} value={acc.id}>
-                    {acc.accountName || acc.accountType.toUpperCase()} (···{acc.accountNumber.slice(-4)}) — ${parseFloat(acc.availableBalance).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+          <Card className="overflow-hidden">
+            <div className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+              <h2 className="text-base font-semibold">Markets</h2>
+              <Input wrapperClassName="sm:w-64" placeholder="Search assets" value={search} onChange={(e) => setSearch(e.target.value)} leading={<Search className="size-4" />} aria-label="Search assets" />
+            </div>
+            <div className="max-h-[440px] overflow-auto border-t border-line scrollbar-thin">
+              <table className="table">
+                <thead className="sticky top-0 z-10">
+                  <tr>
+                    <th>Asset</th>
+                    <th className="text-right">Price</th>
+                    <th className="text-right">24h</th>
+                    <th className="hidden text-right sm:table-cell">Holding</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading && [0, 1, 2, 3].map((i) => <tr key={i}><td colSpan={4}><Skeleton className="h-6" /></td></tr>)}
+                  {filtered.map((m) => {
+                    const h = holdings.find((x) => x.coinId === m.id);
+                    const p = toNumber(m.price_change_percentage_24h);
+                    return (
+                      <tr key={m.id} onClick={() => setCoinId(m.id)} className={cn("cursor-pointer", m.id === coin?.id && "bg-brand-50/50")}>
+                        <td>
+                          <div className="flex items-center gap-3">
+                            <Image src={m.image} alt="" width={26} height={26} className="rounded-full" />
+                            <div>
+                              <p className="font-medium">{m.name}</p>
+                              <p className="text-xs uppercase text-fg-subtle">{m.symbol}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="num text-right font-medium">{formatPrice(m.current_price)}</td>
+                        <td className={cn("num text-right font-medium", p >= 0 ? "text-success-600" : "text-danger-600")}>{formatPercent(p)}</td>
+                        <td className="num hidden text-right text-fg-muted sm:table-cell">{h ? formatCrypto(h.quantity) : "None"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+
+        <div className="space-y-6">
+          <Card className="overflow-hidden xl:sticky xl:top-24">
+            <form onSubmit={trade} className="space-y-5 p-5 sm:p-6">
+              <Segmented
+                value={side}
+                onChange={(s) => {
+                  setSide(s);
+                  setMsg(null);
+                }}
+                className="w-full"
+                options={[
+                  { value: "buy", label: `Buy ${coin?.symbol?.toUpperCase() || ""}` },
+                  { value: "sell", label: `Sell ${coin?.symbol?.toUpperCase() || ""}` },
+                ]}
+              />
+              {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
+              <Select label={side === "buy" ? "Pay from" : "Pay proceeds into"} value={account?.id || ""} onChange={(e) => setAccountId(e.target.value)}>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id} disabled={a.isFrozen}>
+                    {accountLabel(a)} {maskAccount(a.accountNumber)} · {formatMoney(a.availableBalance)}
                   </option>
                 ))}
-              </select>
-            </div>
-
-            {tradeType === "buy" ? (
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1.5">Purchase Amount (USD)</label>
-                <div className="relative">
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-sm">$</span>
-                  <input
-                    type="number"
-                    min="1"
-                    step="any"
-                    value={usdAmount}
-                    onChange={(e) => setUsdAmount(e.target.value)}
-                    placeholder="Min. $1.00"
-                    className="w-full bg-white border border-gray-200 rounded-xl pl-8 pr-4 py-3 text-sm font-semibold outline-none focus:border-brand-primary"
-                    required
-                  />
-                </div>
-                <div className="flex justify-between items-center text-[10px] text-gray-400 mt-1">
-                  <span>Available bank balance: ${activeBankAccountBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
-                  <button type="button" onClick={() => setUsdAmount(activeBankAccountBalance.toFixed(2))} className="text-brand-primary font-bold hover:underline">
-                    Use Max
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1.5">Sale Quantity ({selectedTradeCoin?.symbol})</label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    step="any"
-                    min="0.00000001"
-                    value={coinQuantity}
-                    onChange={(e) => setCoinQuantity(e.target.value)}
-                    placeholder="0.00"
-                    className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm font-semibold outline-none focus:border-brand-primary"
-                    required
-                  />
-                  <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-xs uppercase">
-                    {selectedTradeCoin?.symbol}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center text-[10px] text-gray-400 mt-1">
-                  <span>Available holdings: {activeTradeCoinHolding.toFixed(6)} {selectedTradeCoin?.symbol}</span>
-                  <button type="button" onClick={() => setCoinQuantity(activeTradeCoinHolding.toString())} className="text-brand-primary font-bold hover:underline">
-                    Use Max
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Estimates panel */}
-            <div className="bg-gray-50 p-4 rounded-xl space-y-2 border border-gray-100 text-xs">
-              <div className="flex justify-between">
-                <span className="text-gray-400">Subtotal</span>
-                <span className="font-mono text-gray-700 font-bold">${tradeEstimates.subtotal.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-400">Trading Fee (0.5%)</span>
-                <span className="font-mono text-gray-700 font-bold">${tradeEstimates.fee.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
-              </div>
-              <div className="flex justify-between border-t border-gray-200/60 pt-2 font-semibold text-brand-secondary">
-                <span>{tradeType === "buy" ? "Net Purchased" : "Proceeds Credited"}</span>
-                <span className="font-mono font-bold text-brand-primary">
-                  {tradeType === "buy" 
-                    ? `${tradeEstimates.coinsEst?.toFixed(6) || 0} ${selectedTradeCoin?.symbol}` 
-                    : `$${tradeEstimates.total.toLocaleString("en-US", { minimumFractionDigits: 2 })}`}
-                </span>
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={isTrading}
-              className={`w-full py-3 rounded-xl font-semibold text-white shadow-glow transition-all flex items-center justify-center gap-2 ${
-                tradeType === "buy" 
-                  ? "bg-green-600 hover:bg-green-700 disabled:bg-green-800/50" 
-                  : "bg-red-600 hover:bg-red-700 disabled:bg-red-800/50"
-              }`}
-            >
-              {isTrading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin text-white" />
-                  Executing Order...
-                </>
+              </Select>
+              {side === "buy" ? (
+                <Input
+                  label="Amount (USD)"
+                  inputMode="decimal"
+                  placeholder="100.00"
+                  value={usd}
+                  onChange={(e) => setUsd(e.target.value.replace(/[^0-9.]/g, ""))}
+                  leading={<span className="text-sm font-medium">$</span>}
+                  className="num text-lg font-semibold"
+                />
               ) : (
-                <>
-                  {tradeType === "buy" ? "Confirm Purchase" : "Confirm Sale"}
-                </>
+                <div>
+                  <Input
+                    label={`Quantity (${coin?.symbol?.toUpperCase() || ""})`}
+                    inputMode="decimal"
+                    placeholder="0.00"
+                    value={qty}
+                    onChange={(e) => setQty(e.target.value.replace(/[^0-9.]/g, ""))}
+                    className="num text-lg font-semibold"
+                  />
+                  <div className="mt-1.5 flex justify-between text-xs text-fg-subtle">
+                    <span>You hold {holding ? formatCrypto(holding.quantity, coin.symbol) : "none"}</span>
+                    {holding && (
+                      <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setQty(String(toNumber(holding.quantity)))}>
+                        Sell all
+                      </button>
+                    )}
+                  </div>
+                </div>
               )}
-            </button>
-          </form>
-        </div>
+              <dl className="space-y-2 rounded-2xl bg-surface p-4 text-sm">
+                <div className="flex justify-between">
+                  <dt className="text-fg-subtle">Price</dt>
+                  <dd className="num font-medium">{formatPrice(price)}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-fg-subtle">Fee (0.5%)</dt>
+                  <dd className="num font-medium">{formatMoney(side === "buy" ? buyAmt * FEE : sellQty * price * FEE)}</dd>
+                </div>
+                <div className="flex justify-between border-t border-line pt-2">
+                  <dt className="text-fg-subtle">{side === "buy" ? "You receive (est.)" : "You receive (est.)"}</dt>
+                  <dd className="num font-semibold">{side === "buy" ? formatCrypto(buyQtyEst, coin?.symbol) : formatMoney(sellNetEst)}</dd>
+                </div>
+              </dl>
+              {(usd || qty) && problem && <p className="text-sm text-danger-600">{problem}</p>}
+              <Button type="submit" variant={side === "buy" ? "accent" : "primary"} size="lg" block loading={busy} disabled={!!problem}>
+                {side === "buy" ? "Buy" : "Sell"} {coin?.symbol?.toUpperCase()}
+              </Button>
+              <p className="text-center text-xs text-fg-subtle">Demo trading. Prices are live and orders are simulated.</p>
+            </form>
+          </Card>
 
-        {/* Portfolio Holdings list (Middle/Right panel) */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 lg:col-span-2 flex flex-col justify-between">
-          <div className="space-y-4">
-            <div className="border-b border-gray-50 pb-3 flex justify-between items-center">
-              <div>
-                <h3 className="font-display font-bold text-brand-secondary text-sm">Your Holdings</h3>
-                <p className="text-xs text-gray-400 mt-0.5">Asset storage and growth valuation breakdown.</p>
-              </div>
-              <span className="text-xs bg-brand-primary/10 text-brand-primary px-2.5 py-1 rounded-full font-bold">
-                {portfolio.holdings?.length || 0} Assets
-              </span>
-            </div>
-
-            {portfolio.holdings && portfolio.holdings.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="border-b border-gray-100 text-gray-400 uppercase font-semibold">
-                      <th className="py-2.5">Asset</th>
-                      <th className="py-2.5">Qty Owned</th>
-                      <th className="py-2.5">Avg Buy Price</th>
-                      <th className="py-2.5">Current Price</th>
-                      <th className="py-2.5 text-right">Holding Value</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50 font-medium text-brand-secondary">
-                    {portfolio.holdings.map((h: any) => {
-                      const coin = markets.find((m: any) => m.id === h.coinId);
-                      const qty = parseFloat(h.quantity);
-                      const avg = parseFloat(h.avgBuyPrice);
-                      const current = (coin && coin.current_price != null) ? coin.current_price : avg;
-                      const value = qty * current;
-                      
-                      return (
-                        <tr key={h.id} className="hover:bg-gray-50/50">
-                          <td className="py-3 flex items-center gap-2">
-                            {coin ? (
-                              <img src={coin.image} className="w-6 h-6 rounded-full" alt="" />
-                            ) : (
-                              <div className="w-6 h-6 rounded-full bg-brand-primary/10 flex items-center justify-center text-[10px] font-bold text-brand-primary uppercase">{h.coinSymbol.slice(0, 2)}</div>
-                            )}
-                            <div>
-                              <div className="font-bold">{h.coinName}</div>
-                              <div className="text-[10px] text-gray-400 uppercase font-mono">{h.coinSymbol}</div>
-                            </div>
-                          </td>
-                          <td className="py-3 font-mono">{qty.toFixed(6)}</td>
-                          <td className="py-3 font-mono">${avg.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td className="py-3 font-mono">${current.toLocaleString("en-US", { minimumFractionDigits: 2 })}</td>
-                          <td className="py-3 font-mono text-right font-bold text-brand-primary">${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="py-12 text-center text-gray-400 text-xs">
-                You do not hold any digital assets. Use the trade console to get started.
-              </div>
-            )}
-          </div>
-
-          {/* Historical Orders section */}
-          <div className="mt-6 border-t border-gray-100 pt-5 space-y-3">
-            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Recent Orders Log</h4>
-            <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-              {portfolio.orders && portfolio.orders.length > 0 ? (
-                portfolio.orders.slice(0, 4).map((o: any) => {
-                  const isBuy = o.type === "buy";
-                  const date = new Date(o.createdAt);
-                  return (
-                    <div key={o.id} className="flex justify-between items-center p-3 rounded-xl bg-gray-50 border border-gray-100 text-xs hover:border-gray-200 transition-colors">
-                      <div className="flex items-center gap-2.5">
-                        <span className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
-                          isBuy ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
-                        }`}>
-                          {isBuy ? "B" : "S"}
-                        </span>
-                        <div>
-                          <div className="font-bold text-brand-secondary">
-                            {isBuy ? "Bought" : "Sold"} {parseFloat(o.quantity).toFixed(6)} {o.coinSymbol}
-                          </div>
-                          <div className="text-[10px] text-gray-400">{date.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}</div>
-                        </div>
+          <Card className="overflow-hidden">
+            <CardHeader title="Holdings" />
+            <ul className="mt-3 divide-y divide-line border-t border-line">
+              {!loading && holdings.length === 0 && <EmptyState title="No holdings yet" description="Assets you buy will appear here." className="py-8" />}
+              {holdings.map((h) => {
+                const m = markets.find((x) => x.id === h.coinId);
+                const value = toNumber(h.quantity) * toNumber(m?.current_price);
+                const pnl = value - toNumber(h.quantity) * toNumber(h.avgBuyPrice);
+                return (
+                  <li key={h.coinId}>
+                    <button onClick={() => setCoinId(h.coinId)} className="flex w-full items-center gap-3 px-5 py-3 text-left hover:bg-surface sm:px-6">
+                      {m?.image ? <Image src={m.image} alt="" width={28} height={28} className="rounded-full" /> : <Bitcoin className="size-7" />}
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium">{h.coinName}</p>
+                        <p className="num text-xs text-fg-subtle">{formatCrypto(h.quantity, h.coinSymbol)}</p>
                       </div>
                       <div className="text-right">
-                        <div className="font-mono font-bold text-brand-secondary">${parseFloat(o.totalUsd).toLocaleString("en-US", { minimumFractionDigits: 2 })}</div>
-                        <div className="text-[10px] text-gray-400">Price: ${parseFloat(o.priceAtTime).toLocaleString("en-US", { minimumFractionDigits: 2 })}</div>
+                        <p className="num text-sm font-semibold">{formatMoney(value)}</p>
+                        <p className={cn("num text-xs", pnl >= 0 ? "text-success-600" : "text-danger-600")}>{formatMoney(pnl, { sign: true })}</p>
                       </div>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="text-center py-4 text-[10px] text-gray-400">No order logs found</div>
-              )}
-            </div>
-          </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </Card>
+
+          <Card className="overflow-hidden">
+            <CardHeader title="Recent orders" />
+            <ul className="mt-3 divide-y divide-line border-t border-line">
+              {!loading && (data?.orders.length ?? 0) === 0 && <EmptyState title="No orders yet" className="py-8" />}
+              {data?.orders.slice(0, 8).map((o) => (
+                <li key={o.id} className="flex items-center gap-3 px-5 py-3 text-sm sm:px-6">
+                  <Badge tone={o.type === "buy" || o.type === "deposit" ? "success" : "neutral"} className="w-[78px] justify-center capitalize">
+                    {o.type}
+                  </Badge>
+                  <div className="min-w-0 flex-1">
+                    <p className="num truncate font-medium">{formatCrypto(o.quantity, o.coinSymbol)}</p>
+                    <p className="text-xs text-fg-subtle">{formatDateTime(o.createdAt)}</p>
+                  </div>
+                  <p className="num font-medium">{formatMoney(o.totalUsd)}</p>
+                </li>
+              ))}
+            </ul>
+          </Card>
         </div>
       </div>
     </div>

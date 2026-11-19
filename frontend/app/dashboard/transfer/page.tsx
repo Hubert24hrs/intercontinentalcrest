@@ -1,567 +1,379 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import {
-  ArrowRight, ArrowLeftRight, Loader2, CheckCircle2, AlertTriangle,
-  User, Building2, Globe, Info, ArrowUpRight, Wallet, ShieldCheck,
-  Zap, Clock, ChevronRight
-} from "lucide-react";
-import { accountsApi, transactionsApi, beneficiariesApi } from "@/lib/api";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState } from "react";
+import { ArrowLeftRight, CheckCircle2, Globe2, Info, Trash2, UserPlus, Users } from "lucide-react";
+import { accountsApi, beneficiariesApi, transactionsApi } from "@/lib/api";
+import { useAsync } from "@/lib/useAsync";
+import { accountLabel, formatDateTime, formatMoney, maskAccount, toNumber } from "@/lib/format";
+import { Card, CardHeader } from "@/components/ui/Card";
+import { Button, ButtonLink } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Field";
+import { Alert } from "@/components/ui/Alert";
+import { EmptyState, PageHeader, Segmented, Skeleton } from "@/components/ui/misc";
+import { refreshNotifications } from "@/components/app/NotificationsMenu";
+import { pickAccount, queryParam } from "@/lib/url";
 
-type TransferType = "internal" | "domestic" | "international";
-
-const TRANSFER_TYPES = [
-  {
-    value: "internal" as TransferType,
-    label: "Internal Transfer",
-    icon: ArrowLeftRight,
-    fee: "Free",
-    time: "Instant",
-    description: "Move funds between your accounts or to another Intercontinental Crest account",
-    gradient: "from-brand-primary to-blue-500",
-    badge: "bg-emerald-100 text-emerald-700",
-  },
-  {
-    value: "domestic" as TransferType,
-    label: "Domestic Transfer",
-    icon: Building2,
-    fee: "Free",
-    time: "1-2 Business Days",
-    description: "Send to any US bank account by routing & account number",
-    gradient: "from-violet-500 to-purple-600",
-    badge: "bg-emerald-100 text-emerald-700",
-  },
-  {
-    value: "international" as TransferType,
-    label: "International Wire",
-    icon: Globe,
-    fee: "$3.00",
-    time: "3-5 Business Days",
-    description: "Send to overseas accounts — flat $3.00 SWIFT wire fee applies",
-    gradient: "from-amber-500 to-orange-500",
-    badge: "bg-amber-100 text-amber-700",
-  },
-];
+type Mode = "own" | "person" | "international";
+const WIRE_FEE = 3;
 
 export default function TransferPage() {
-  const [accounts, setAccounts] = useState<any[]>([]);
-  const [beneficiaries, setBeneficiaries] = useState<any[]>([]);
-  const [dataLoading, setDataLoading] = useState(true);
+  const { data, loading, error: loadError, reload } = useAsync(async () => {
+    const [accounts, payees] = await Promise.all([accountsApi.getAccounts(), beneficiariesApi.getBeneficiaries()]);
+    return { accounts: accounts as any[], payees: payees as any[] };
+  });
 
-  const [transferType, setTransferType] = useState<TransferType>("internal");
-  const [senderAccountId, setSenderAccountId] = useState("");
-  const [toMode, setToMode] = useState<"manual" | "beneficiary">("manual");
-  const [selectedBeneficiaryId, setSelectedBeneficiaryId] = useState("");
-  const [receiverAccountNumber, setReceiverAccountNumber] = useState("");
+  const [mode, setMode] = useState<Mode>("person");
+  const [fromId, setFromId] = useState("");
+  const [toOwnId, setToOwnId] = useState("");
+  const [payeeId, setPayeeId] = useState("");
+  const [recipientNumber, setRecipientNumber] = useState("");
+  const [recipientName, setRecipientName] = useState("");
+  const [bankName, setBankName] = useState("");
+  const [swift, setSwift] = useState("");
+  const [savePayee, setSavePayee] = useState(false);
   const [amount, setAmount] = useState("");
-  const [description, setDescription] = useState("");
-
+  const [memo, setMemo] = useState("");
+  const [step, setStep] = useState<"details" | "review" | "done">("details");
   const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState<any>(null);
-  const [sentAmount, setSentAmount] = useState(0);
-  const [error, setError] = useState("");
-  const [loadError, setLoadError] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [receipt, setReceipt] = useState<any>(null);
 
-  const loadData = () => {
-    setDataLoading(true);
-    setLoadError("");
-    Promise.all([
-      accountsApi.getAccounts(),
-      beneficiariesApi.getBeneficiaries(),
-    ]).then(([accs, bens]) => {
-      setAccounts(accs || []);
-      setBeneficiaries(bens || []);
-      if (accs && accs.length > 0) setSenderAccountId(accs[0].id);
-    }).catch((err: any) => {
-      console.error("Failed to load transfer data:", err);
-      setLoadError(err.message || "Unable to retrieve accounts. Please check your connection and try again.");
-    }).finally(() => setDataLoading(false));
-  };
+  const accounts = data?.accounts ?? [];
+  const payees = data?.payees ?? [];
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  // Defaults are derived during render (no state syncing in effects).
+  const from = pickAccount(accounts, fromId || queryParam("from"));
+  const fromAccountId = from?.id || "";
+  const ownTargets = accounts.filter((a) => a.id !== fromAccountId);
+  const toOwnAccountId = ownTargets.find((a) => a.id === toOwnId)?.id || ownTargets[0]?.id || "";
+  const amt = toNumber(amount);
+  const fee = mode === "international" ? WIRE_FEE : 0;
+  const total = amt + fee;
+  const available = toNumber(from?.availableBalance);
+  const selectedPayee = payees.find((p) => p.id === payeeId);
 
-  const senderAccount = accounts.find(a => a.id === senderAccountId);
-  const availableBalance = senderAccount ? parseFloat(senderAccount.availableBalance) : 0;
-  const transferAmount = parseFloat(amount) || 0;
-  const fee = transferType === "international" ? 3.00 : 0;
-  const totalDeducted = transferAmount + fee;
-  const hasFunds = transferAmount > 0 && totalDeducted <= availableBalance;
-  const remaining = availableBalance - totalDeducted;
-  const progressPct = availableBalance > 0 ? Math.min(100, (totalDeducted / availableBalance) * 100) : 0;
-
-  const resolvedReceiverNumber = useMemo(() => {
-    if (toMode === "beneficiary") {
-      const b = beneficiaries.find(b => b.id === selectedBeneficiaryId);
-      return b?.accountNumber || "";
+  const destination = (() => {
+    if (mode === "own") {
+      const acct = accounts.find((a) => a.id === toOwnAccountId);
+      return acct ? { number: acct.accountNumber, label: `${accountLabel(acct)} ${maskAccount(acct.accountNumber)}` } : null;
     }
-    return receiverAccountNumber.trim();
-  }, [toMode, selectedBeneficiaryId, receiverAccountNumber, beneficiaries]);
+    if (payeeId && selectedPayee) return { number: selectedPayee.accountNumber, label: `${selectedPayee.beneficiaryName} · ${selectedPayee.accountNumber}` };
+    const n = recipientNumber.trim().toUpperCase();
+    if (!n) return null;
+    return { number: n, label: recipientName.trim() ? `${recipientName.trim()} · ${n}` : n };
+  })();
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!hasFunds) { setError("Insufficient funds for this transfer."); return; }
-    if (!resolvedReceiverNumber) { setError("Please enter a destination account number."); return; }
+  const validationError = (() => {
+    if (!from) return "Choose the account to send from";
+    if (from.isFrozen) return "This account is frozen";
+    if (!destination) return mode === "own" ? "Choose the account to send to" : "Enter the recipient's account number";
+    if (destination.number === from.accountNumber) return "You can't send money to the same account";
+    if (!/^[A-Za-z0-9-]{4,34}$/.test(destination.number)) return "That account number doesn't look right";
+    if (!(amt > 0)) return "Enter an amount";
+    if (!/^\d+(\.\d{1,2})?$/.test(amount.trim())) return "Use at most 2 decimal places";
+    if (total > available) return `You have ${formatMoney(available)} available`;
+    return null;
+  })();
+
+  function reset() {
+    setAmount("");
+    setMemo("");
+    setRecipientNumber("");
+    setRecipientName("");
+    setBankName("");
+    setSwift("");
+    setSavePayee(false);
+    setPayeeId("");
+    setStep("details");
+    setReceipt(null);
+    setError(null);
+  }
+
+  async function send() {
+    if (!from || !destination) return;
     setSubmitting(true);
-    setError("");
-    setSuccess(null);
+    setError(null);
     try {
-      const result = await transactionsApi.initiateTransfer({
-        senderAccountId,
-        receiverAccountNumber: resolvedReceiverNumber,
-        amount: transferAmount,
-        description: description.trim() || "Fund Transfer",
-        type: transferType === "international" ? "international_transfer" : "transfer",
+      const tx = await transactionsApi.initiateTransfer({
+        fromAccountId: from.id,
+        toAccountNumber: destination.number,
+        amount: amt,
+        description: memo.trim() || undefined,
+        type: mode === "international" ? "international_transfer" : "transfer",
       });
-      setSentAmount(transferAmount);
-      setSuccess(result);
-      setAmount("");
-      setDescription("");
-      setReceiverAccountNumber("");
-      accountsApi.getAccounts().then(accs => setAccounts(accs || [])).catch(() => {});
+      if (savePayee && mode !== "own" && !payeeId && recipientName.trim()) {
+        await beneficiariesApi
+          .createBeneficiary({
+            beneficiaryName: recipientName.trim(),
+            accountNumber: destination.number,
+            bankName: bankName.trim() || undefined,
+            swiftCode: swift.trim() || undefined,
+            isInternational: mode === "international",
+          })
+          .catch(() => null);
+      }
+      setReceipt(tx);
+      setStep("done");
+      refreshNotifications();
+      reload({ silent: true });
     } catch (err: any) {
-      setError(err.message || "Transfer failed. Please try again.");
+      setError(err.message);
+      setStep("details");
     } finally {
       setSubmitting(false);
     }
-  };
-
-  if (dataLoading) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-        <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-[#0A2342] to-brand-primary flex items-center justify-center shadow-lg animate-pulse">
-          <ArrowLeftRight className="w-7 h-7 text-white" />
-        </div>
-        <div className="flex items-center gap-2 text-gray-500 text-sm">
-          <Loader2 className="w-4 h-4 animate-spin text-brand-primary" />
-          Connecting to secure ledger lines...
-        </div>
-      </div>
-    );
   }
 
-  if (loadError) {
-    return (
-      <div className="max-w-lg mx-auto text-center py-20 space-y-4">
-        <div className="w-16 h-16 rounded-2xl bg-red-100 flex items-center justify-center mx-auto mb-5">
-          <AlertTriangle className="w-8 h-8 text-red-600" />
-        </div>
-        <h2 className="font-display font-bold text-brand-secondary text-xl">Failed to Load Accounts</h2>
-        <p className="text-gray-500 text-sm">{loadError}</p>
-        <button
-          onClick={loadData}
-          className="btn-primary mx-auto"
-        >
-          Try Again
-        </button>
-      </div>
-    );
+  async function removePayee(id: string) {
+    if (!confirm("Remove this payee?")) return;
+    await beneficiariesApi.deleteBeneficiary(id).catch(() => null);
+    if (payeeId === id) setPayeeId("");
+    reload({ silent: true });
   }
-
-  if (accounts.length === 0) {
-    return (
-      <div className="max-w-lg mx-auto text-center py-20">
-        <div className="w-16 h-16 rounded-2xl bg-amber-100 flex items-center justify-center mx-auto mb-5">
-          <AlertTriangle className="w-8 h-8 text-amber-600" />
-        </div>
-        <h2 className="font-display font-bold text-brand-secondary text-xl mb-2">No Accounts Found</h2>
-        <p className="text-gray-500 text-sm">You need at least one active bank account to make a transfer.</p>
-      </div>
-    );
-  }
-
-  if (success) {
-    return (
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="max-w-lg mx-auto"
-      >
-        <div className="relative overflow-hidden rounded-3xl">
-          <div className="absolute inset-0 bg-gradient-to-br from-[#060f1e] via-[#0A2342] to-[#0d3060]" />
-          <div className="absolute top-0 right-0 w-48 h-48 rounded-full bg-emerald-500/10 blur-3xl -translate-y-12 translate-x-12" />
-          <div className="relative text-white p-10 text-center space-y-5">
-            <div className="w-16 h-16 rounded-full bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center mx-auto">
-              <CheckCircle2 className="w-8 h-8 text-emerald-400" />
-            </div>
-            <div>
-              <h2 className="font-display font-bold text-2xl text-white">Transfer Successful</h2>
-              <p className="text-white/60 text-sm mt-1">Your funds have been dispatched securely.</p>
-            </div>
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-white/40">Amount Sent</span>
-                <span className="font-bold text-emerald-400">${sentAmount.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
-              </div>
-              {success.transactionReference && (
-                <div className="flex justify-between">
-                  <span className="text-white/40">Reference</span>
-                  <span className="font-mono text-xs text-white/70">{success.transactionReference}</span>
-                </div>
-              )}
-            </div>
-            <button
-              onClick={() => setSuccess(null)}
-              className="btn-primary mx-auto"
-            >
-              New Transfer <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      </motion.div>
-    );
-  }
-
-  const activeType = TRANSFER_TYPES.find(t => t.value === transferType)!;
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      {/* Page header */}
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3 }}
-        className="flex items-start gap-4"
-      >
-        <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-brand-primary to-[#0078B3] flex items-center justify-center shadow-lg flex-shrink-0">
-          <ArrowLeftRight className="w-5 h-5 text-white" />
-        </div>
-        <div>
-          <h1 className="font-display font-bold text-brand-secondary text-2xl">Transfer Funds</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Send money instantly, domestically, or internationally.</p>
-        </div>
-      </motion.div>
+    <div>
+      <PageHeader title="Transfers" description="Move money between your accounts, to other customers, or abroad." />
 
-      {/* Transfer type selector */}
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, delay: 0.05 }}
-        className="grid grid-cols-1 sm:grid-cols-3 gap-3"
-      >
-        {TRANSFER_TYPES.map((t, i) => (
-          <motion.button
-            key={t.value}
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3, delay: 0.08 + i * 0.05 }}
-            type="button"
-            onClick={() => setTransferType(t.value)}
-            className={`relative p-4 rounded-2xl border-2 text-left transition-all duration-200 overflow-hidden group ${
-              transferType === t.value
-                ? "border-brand-primary bg-brand-primary/5 shadow-md"
-                : "border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm"
-            }`}
-          >
-            {transferType === t.value && (
-              <div className={`absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r ${t.gradient}`} />
-            )}
-            <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${t.gradient} flex items-center justify-center mb-3 shadow-md`}>
-              <t.icon className="w-4 h-4 text-white" />
+      <div className="grid gap-6 lg:grid-cols-[1.45fr_1fr]">
+        <Card className="overflow-hidden">
+          {loading ? (
+            <div className="space-y-4 p-6">
+              <Skeleton className="h-10" />
+              <Skeleton className="h-10" />
+              <Skeleton className="h-10" />
             </div>
-            <div className="text-xs font-bold text-brand-secondary">{t.label}</div>
-            <div className="flex items-center gap-2 mt-1">
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${t.badge}`}>{t.fee}</span>
-              <span className="text-[10px] text-gray-400 flex items-center gap-0.5">
-                <Clock className="w-2.5 h-2.5" />{t.time}
-              </span>
+          ) : loadError ? (
+            <div className="p-6">
+              <Alert tone="danger">{loadError}</Alert>
             </div>
-          </motion.button>
-        ))}
-      </motion.div>
-
-      {/* Info banner */}
-      <motion.div
-        key={transferType}
-        initial={{ opacity: 0, x: -8 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ duration: 0.2 }}
-        className="flex items-start gap-2.5 bg-brand-primary/5 border border-brand-primary/20 rounded-xl p-3 text-xs text-brand-secondary"
-      >
-        <Info className="w-3.5 h-3.5 text-brand-primary flex-shrink-0 mt-0.5" />
-        {activeType.description}
-      </motion.div>
-
-      {/* Main form + preview */}
-      <motion.div
-        initial={{ opacity: 0, y: 12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.35, delay: 0.15 }}
-        className="grid grid-cols-1 lg:grid-cols-5 gap-5"
-      >
-        {/* ── Left: Form ── */}
-        <form onSubmit={handleSubmit} className="lg:col-span-3 bg-white border border-gray-100 rounded-3xl p-6 shadow-sm space-y-5">
-
-          {error && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              className="flex items-start gap-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-xl p-3.5"
-            >
-              <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-              <span>{error}</span>
-            </motion.div>
-          )}
-
-          {/* From account */}
-          <div className="space-y-1.5">
-            <label className="block text-xs font-bold text-gray-700">From Account</label>
-            <select
-              className="form-input text-sm"
-              value={senderAccountId}
-              onChange={(e) => setSenderAccountId(e.target.value)}
-              required
-            >
-              {accounts.map((acc: any) => (
-                <option key={acc.id} value={acc.id}>
-                  {acc.accountName || acc.accountType.toUpperCase()} (···{acc.accountNumber.slice(-4)}) — ${parseFloat(acc.availableBalance).toLocaleString("en-US", { minimumFractionDigits: 2 })} available
-                </option>
-              ))}
-            </select>
-            {/* Balance progress bar */}
-            {transferAmount > 0 && (
-              <div className="space-y-1 mt-2">
-                <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                  <motion.div
-                    initial={{ width: 0 }}
-                    animate={{ width: `${progressPct}%` }}
-                    transition={{ duration: 0.4 }}
-                    className={`h-full rounded-full ${hasFunds ? "bg-brand-primary" : "bg-red-500"}`}
-                  />
-                </div>
-                <p className="text-[10px] text-gray-400 font-mono">
-                  Using {progressPct.toFixed(1)}% of available balance
-                </p>
+          ) : step === "done" && receipt ? (
+            <div className="p-6 sm:p-8">
+              <div className="flex flex-col items-center text-center">
+                <span className="flex size-14 items-center justify-center rounded-full bg-success-50 text-success-600">
+                  <CheckCircle2 className="size-7" />
+                </span>
+                <h2 className="mt-4 text-xl font-semibold">Money sent</h2>
+                <p className="num mt-1 text-3xl font-semibold tracking-tight">{formatMoney(receipt.amount)}</p>
+                <p className="mt-1 text-sm text-fg-subtle">to {destination?.label}</p>
               </div>
-            )}
-          </div>
-
-          {/* To */}
-          <div className="space-y-1.5">
-            <label className="block text-xs font-bold text-gray-700">To</label>
-            <div className="flex bg-gray-50 border border-gray-200 rounded-xl p-1">
-              <button
-                type="button"
-                onClick={() => setToMode("manual")}
-                className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all ${toMode === "manual" ? "bg-white text-brand-secondary shadow-sm" : "text-gray-400"}`}
-              >
-                <User className="w-3.5 h-3.5" /> Enter Number
-              </button>
-              {beneficiaries.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => { setToMode("beneficiary"); if (beneficiaries.length > 0 && !selectedBeneficiaryId) setSelectedBeneficiaryId(beneficiaries[0].id); }}
-                  className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-all ${toMode === "beneficiary" ? "bg-white text-brand-secondary shadow-sm" : "text-gray-400"}`}
-                >
-                  <Building2 className="w-3.5 h-3.5" /> Saved Payee
-                </button>
-              )}
+              <dl className="mt-8 divide-y divide-line rounded-2xl border border-line px-5">
+                {[
+                  ["Reference", <span key="r" className="font-mono text-[13px]">{receipt.transactionReference}</span>],
+                  ["From", `${accountLabel(from)} ${maskAccount(from?.accountNumber)}`],
+                  ["Fee", formatMoney(receipt.fee)],
+                  ["Date", formatDateTime(receipt.createdAt)],
+                  ["Status", "Completed"],
+                ].map(([k, v]) => (
+                  <div key={String(k)} className="flex justify-between gap-4 py-3 text-sm">
+                    <dt className="text-fg-subtle">{k}</dt>
+                    <dd className="text-right font-medium">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+              <div className="mt-6 flex flex-wrap gap-3">
+                <Button onClick={reset}>Make another transfer</Button>
+                <ButtonLink href="/dashboard/transactions" variant="secondary">
+                  View transactions
+                </ButtonLink>
+              </div>
             </div>
-
-            <AnimatePresence mode="wait">
-              {toMode === "manual" ? (
-                <motion.input
-                  key="manual"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  type="text"
-                  className="form-input font-mono text-sm"
-                  placeholder={transferType === "international" ? "IBAN / Account Number" : "Account / Routing Number"}
-                  value={receiverAccountNumber}
-                  onChange={(e) => setReceiverAccountNumber(e.target.value)}
-                  required
-                  autoComplete="off"
-                />
-              ) : (
-                <motion.select
-                  key="beneficiary"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="form-input"
-                  value={selectedBeneficiaryId}
-                  onChange={(e) => setSelectedBeneficiaryId(e.target.value)}
-                  required
-                >
-                  {beneficiaries.map((b: any) => (
-                    <option key={b.id} value={b.id}>
-                      {b.beneficiaryName} — {b.accountNumber}{b.bankName ? ` (${b.bankName})` : ""}
-                    </option>
-                  ))}
-                </motion.select>
-              )}
-            </AnimatePresence>
-          </div>
-
-          {/* Amount */}
-          <div className="space-y-1.5">
-            <label className="block text-xs font-bold text-gray-700">Amount (USD)</label>
-            <div className="relative">
-              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-lg">$</span>
-              <input
-                type="number"
-                min="0.01"
-                step="0.01"
-                className="form-input pl-9 text-xl font-display font-bold text-brand-secondary"
-                placeholder="0.00"
-                value={amount}
-                onChange={(e) => { setAmount(e.target.value); setError(""); }}
-                required
+          ) : step === "review" ? (
+            <div className="p-6 sm:p-8">
+              <h2 className="text-lg font-semibold">Review your transfer</h2>
+              <p className="mt-1 text-sm text-fg-subtle">Check the details. Transfers can&apos;t be cancelled once sent.</p>
+              <dl className="mt-6 divide-y divide-line rounded-2xl border border-line px-5">
+                {[
+                  ["From", `${accountLabel(from)} ${maskAccount(from?.accountNumber)}`],
+                  ["To", destination?.label],
+                  ["Amount", formatMoney(amt)],
+                  ["Fee", formatMoney(fee)],
+                  ["Total", <strong key="t">{formatMoney(total)}</strong>],
+                  ["Arrives", mode === "international" ? "Recorded immediately" : "Instantly"],
+                  ...(memo.trim() ? [["Note", memo.trim()]] : []),
+                ].map(([k, v]) => (
+                  <div key={String(k)} className="flex justify-between gap-4 py-3 text-sm">
+                    <dt className="text-fg-subtle">{k}</dt>
+                    <dd className="num text-right font-medium">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+              <div className="mt-6 flex flex-wrap gap-3">
+                <Button variant="accent" size="lg" loading={submitting} onClick={send}>
+                  Confirm and send {formatMoney(total)}
+                </Button>
+                <Button variant="secondary" size="lg" onClick={() => setStep("details")} disabled={submitting}>
+                  Edit
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <form
+              className="space-y-5 p-6 sm:p-8"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!validationError) setStep("review");
+              }}
+            >
+              <Segmented
+                value={mode}
+                onChange={(m) => {
+                  setMode(m);
+                  setPayeeId("");
+                  setError(null);
+                }}
+                className="w-full"
+                options={[
+                  { value: "person", label: "To someone", icon: <Users className="size-4" /> },
+                  { value: "own", label: "My accounts", icon: <ArrowLeftRight className="size-4" /> },
+                  { value: "international", label: "International", icon: <Globe2 className="size-4" /> },
+                ]}
               />
-              <button
-                type="button"
-                onClick={() => setAmount((availableBalance - fee).toFixed(2))}
-                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-brand-primary hover:underline bg-brand-primary/10 px-2 py-0.5 rounded-full"
-              >
-                MAX
-              </button>
-            </div>
-          </div>
 
-          {/* Description */}
-          <div className="space-y-1.5">
-            <label className="block text-xs font-bold text-gray-700">Reference <span className="font-normal text-gray-400">(optional)</span></label>
-            <input
-              type="text"
-              className="form-input"
-              placeholder="e.g. Rent payment, Invoice #1234..."
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              maxLength={100}
-            />
-          </div>
+              {error && <Alert tone="danger">{error}</Alert>}
 
-          <button
-            type="submit"
-            disabled={submitting || !hasFunds || !resolvedReceiverNumber}
-            className="btn-primary w-full justify-center disabled:opacity-40 disabled:cursor-not-allowed disabled:transform-none"
-          >
-            {submitting ? (
-              <Loader2 className="w-5 h-5 animate-spin" />
-            ) : (
-              <>
-                Send {transferAmount > 0 ? `$${transferAmount.toLocaleString("en-US", { minimumFractionDigits: 2 })}` : "Now"}
-                <ArrowRight className="w-4 h-4" />
-              </>
-            )}
-          </button>
-        </form>
+              <Select label="From" value={fromAccountId} onChange={(e) => setFromId(e.target.value)}>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id} disabled={a.isFrozen}>
+                    {accountLabel(a)} {maskAccount(a.accountNumber)} · {formatMoney(a.availableBalance)}
+                    {a.isFrozen ? " (frozen)" : ""}
+                  </option>
+                ))}
+              </Select>
 
-        {/* ── Right: Live Preview Card ── */}
-        <div className="lg:col-span-2 space-y-4">
-          <div className="relative overflow-hidden rounded-3xl">
-            <div className="absolute inset-0 bg-gradient-to-br from-[#060f1e] via-[#0A2342] to-[#0d3060]" />
-            <div className="absolute top-0 right-0 w-40 h-40 rounded-full bg-brand-primary/10 blur-3xl -translate-y-10 translate-x-10" />
-            <div
-              className="absolute inset-0 opacity-[0.035]"
-              style={{ backgroundImage: "radial-gradient(circle, white 1px, transparent 1px)", backgroundSize: "18px 18px" }}
-            />
-            <div className="relative text-white p-6 space-y-5">
-              <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="text-[10px] font-bold text-white/50 uppercase tracking-widest">Transfer Preview</span>
-              </div>
-
-              {/* From */}
-              <div className="space-y-1">
-                <span className="text-[9px] text-white/30 uppercase tracking-wider font-semibold">From</span>
-                <div className="flex items-center gap-2.5 bg-white/5 border border-white/10 rounded-xl p-3">
-                  <div className="w-8 h-8 rounded-full bg-brand-primary/20 flex items-center justify-center">
-                    <Wallet className="w-4 h-4 text-brand-primary" />
-                  </div>
-                  <div>
-                    <div className="font-semibold text-sm text-white">{senderAccount?.accountName || senderAccount?.accountType?.toUpperCase() || "Select Account"}</div>
-                    <div className="text-white/40 text-[10px] font-mono">···{senderAccount?.accountNumber?.slice(-4) || "----"}</div>
-                  </div>
-                  <div className="ml-auto text-right">
-                    <div className="text-emerald-400 font-mono font-bold text-sm">${availableBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}</div>
-                    <div className="text-white/30 text-[9px]">available</div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Arrow */}
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-px bg-gradient-to-r from-transparent to-white/10" />
-                <div className="w-8 h-8 rounded-full bg-brand-primary/20 border border-brand-primary/30 flex items-center justify-center">
-                  <ArrowUpRight className="w-4 h-4 text-brand-primary" />
-                </div>
-                <div className="flex-1 h-px bg-gradient-to-l from-transparent to-white/10" />
-              </div>
-
-              {/* Amount display */}
-              <div className="text-center space-y-1">
-                <span className="text-[9px] text-white/30 uppercase tracking-wider font-semibold block">Transfer Amount</span>
-                <AnimatePresence mode="wait">
-                  <motion.div
-                    key={amount}
-                    initial={{ opacity: 0, scale: 0.9 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className="font-display font-extrabold text-3xl text-white"
-                  >
-                    ${transferAmount > 0 ? transferAmount.toLocaleString("en-US", { minimumFractionDigits: 2 }) : "0.00"}
-                  </motion.div>
-                </AnimatePresence>
-              </div>
-
-              {/* Fee breakdown */}
-              {transferAmount > 0 && (
-                <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 space-y-2 text-xs">
-                  <div className="flex justify-between">
-                    <span className="text-white/40">Transfer amount</span>
-                    <span className="font-mono font-semibold">${transferAmount.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
-                  </div>
-                  {fee > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-white/40">Wire fee</span>
-                      <span className="font-mono text-amber-400">${fee.toFixed(2)}</span>
-                    </div>
+              {mode === "own" ? (
+                <Select label="To" value={toOwnAccountId} onChange={(e) => setToOwnId(e.target.value)}>
+                  {ownTargets.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {accountLabel(a)} {maskAccount(a.accountNumber)}
+                      </option>
+                    ))}
+                </Select>
+              ) : (
+                <div className="space-y-4">
+                  {payees.length > 0 && (
+                    <Select label="Recipient" value={payeeId} onChange={(e) => setPayeeId(e.target.value)}>
+                      <option value="">New recipient</option>
+                      {payees
+                        .filter((p) => (mode === "international" ? p.isInternational : true))
+                        .map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.beneficiaryName} · {p.accountNumber}
+                          </option>
+                        ))}
+                    </Select>
                   )}
-                  <div className="border-t border-white/10 pt-2 flex justify-between font-semibold">
-                    <span className="text-white/60">Total deducted</span>
-                    <span className={`font-mono ${hasFunds ? "text-brand-primary" : "text-red-400"}`}>
-                      ${totalDeducted.toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-[10px]">
-                    <span className="text-white/30">Remaining balance</span>
-                    <span className={`font-mono ${hasFunds ? "text-white/50" : "text-red-400"}`}>
-                      ${Math.max(0, remaining).toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
+                  {!payeeId && (
+                    <>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <Input label="Recipient name" value={recipientName} onChange={(e) => setRecipientName(e.target.value)} placeholder="Full name" optional={!savePayee} />
+                        <Input
+                          label={mode === "international" ? "IBAN or account number" : "Account number"}
+                          value={recipientNumber}
+                          onChange={(e) => setRecipientNumber(e.target.value.replace(/\s/g, ""))}
+                          placeholder={mode === "international" ? "GB29NWBK60161331926819" : "IC0000000000"}
+                          className="font-mono"
+                          required
+                        />
+                      </div>
+                      {mode === "international" && (
+                        <div className="grid gap-4 sm:grid-cols-2">
+                          <Input label="Bank name" optional value={bankName} onChange={(e) => setBankName(e.target.value)} />
+                          <Input label="SWIFT / BIC" optional value={swift} onChange={(e) => setSwift(e.target.value.toUpperCase())} className="font-mono" maxLength={11} />
+                        </div>
+                      )}
+                      <label className="flex items-center gap-2.5 text-sm text-fg-muted">
+                        <input type="checkbox" checked={savePayee} onChange={(e) => setSavePayee(e.target.checked)} className="size-4 accent-brand-600" />
+                        Save as a payee for next time
+                      </label>
+                    </>
+                  )}
                 </div>
               )}
 
-              {/* Security badge */}
-              <div className="flex items-center gap-1.5 text-[10px] text-emerald-400/70 border-t border-white/5 pt-3">
-                <ShieldCheck className="w-3 h-3" />
-                256-bit encrypted transfer · Bank-grade security
+              <div>
+                <Input
+                  label="Amount"
+                  inputMode="decimal"
+                  placeholder="0.00"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+                  leading={<span className="text-sm font-medium">$</span>}
+                  className="num text-lg font-semibold"
+                />
+                <div className="mt-1.5 flex items-center justify-between text-xs text-fg-subtle">
+                  <span>
+                    Available: <span className="num font-medium text-fg">{formatMoney(available)}</span>
+                    {fee > 0 && <> · Wire fee {formatMoney(fee)}</>}
+                  </span>
+                  <button type="button" className="font-medium text-brand-700 hover:underline" onClick={() => setAmount(Math.max(0, available - fee).toFixed(2))}>
+                    Send max
+                  </button>
+                </div>
               </div>
-            </div>
-          </div>
 
-          {/* Speed info */}
-          <div className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm space-y-3">
-            <div className="text-xs font-bold text-gray-700 flex items-center gap-1.5">
-              <Zap className="w-3.5 h-3.5 text-brand-primary" />
-              Transfer Details
-            </div>
-            {[
-              { label: "Method", value: activeType.label },
-              { label: "Processing Time", value: activeType.time },
-              { label: "Fee", value: activeType.fee },
-            ].map(({ label, value }) => (
-              <div key={label} className="flex justify-between text-xs">
-                <span className="text-gray-400">{label}</span>
-                <span className="font-semibold text-brand-secondary">{value}</span>
+              <Input label="Note" optional value={memo} onChange={(e) => setMemo(e.target.value)} maxLength={140} placeholder="What's it for?" />
+
+              {amount && validationError && <p className="text-sm text-danger-600">{validationError}</p>}
+              <Button type="submit" size="lg" block disabled={!!validationError || (mode !== "own" && savePayee && !payeeId && !recipientName.trim())}>
+                Continue
+              </Button>
+            </form>
+          )}
+        </Card>
+
+        <div className="space-y-6">
+          <Card className="overflow-hidden">
+            <CardHeader title="Payees" description="People and businesses you've saved" icon={<UserPlus className="size-4" />} />
+            <ul className="mt-3 divide-y divide-line border-t border-line">
+              {loading && <li className="px-6 py-4"><Skeleton className="h-6" /></li>}
+              {!loading && payees.length === 0 && (
+                <EmptyState title="No payees yet" description="Tick “Save as a payee” when you send money to someone new." className="py-8" />
+              )}
+              {payees.map((p) => (
+                <li key={p.id} className="flex items-center gap-3 px-5 py-3 sm:px-6">
+                  <span className="flex size-9 items-center justify-center rounded-full bg-brand-50 text-xs font-semibold text-brand-700">
+                    {p.beneficiaryName.slice(0, 2).toUpperCase()}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{p.beneficiaryName}</p>
+                    <p className="truncate font-mono text-xs text-fg-subtle">
+                      {p.accountNumber}
+                      {p.isInternational ? " · international" : ""}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setMode(p.isInternational ? "international" : "person");
+                      setPayeeId(p.id);
+                      setStep("details");
+                    }}
+                  >
+                    Pay
+                  </Button>
+                  <button onClick={() => removePayee(p.id)} className="rounded-lg p-1.5 text-fg-faint hover:bg-danger-50 hover:text-danger-600" aria-label={`Remove ${p.beneficiaryName}`}>
+                    <Trash2 className="size-4" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </Card>
+
+          <Card className="p-6">
+            <div className="flex items-start gap-3">
+              <Info className="mt-0.5 size-4 shrink-0 text-brand-600" />
+              <div className="space-y-2 text-sm text-fg-muted">
+                <p className="font-semibold text-fg">Good to know</p>
+                <p>Transfers to Intercontinental Crest customers arrive instantly and are free.</p>
+                <p>International wires cost {formatMoney(WIRE_FEE)}. Single transfers are limited to $1,000,000.</p>
+                <p>Demo platform: transfers to external accounts are recorded but no real money moves.</p>
               </div>
-            ))}
-          </div>
+            </div>
+          </Card>
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 }

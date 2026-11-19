@@ -1,246 +1,132 @@
 "use client";
 
-import { useState } from "react";
-import { Shield, Users, Key, Search, Plus, ShieldCheck, Check, AlertCircle } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Search, ShieldCheck, UserCog } from "lucide-react";
+import { adminApi } from "@/lib/api";
+import { useAsync } from "@/lib/useAsync";
+import { formatDate } from "@/lib/format";
+import { Card, CardHeader } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Field";
+import { Alert } from "@/components/ui/Alert";
+import { Badge } from "@/components/ui/Badge";
+import { Avatar, EmptyState, PageHeader, Skeleton } from "@/components/ui/misc";
+import { useSessionContext } from "@/components/app/SessionContext";
 
-interface Role {
-  id: string;
-  name: string;
-  description: string;
-  userCount: number;
-  permissions: string[];
-}
-
-const initialRoles: Role[] = [
-  { id: "R-1", name: "Super Admin", description: "Full system control, database migrations, configuration modification, and root access", userCount: 2, permissions: ["*"] },
-  { id: "R-2", name: "Compliance Officer", description: "Audit review, KYC document approval, risk verification and AML reporting access", userCount: 4, permissions: ["kyc.review", "transactions.view", "audit.view", "reports.generate"] },
-  { id: "R-3", name: "Support Agent", description: "Access to support tickets, user profile management, fee reversals and query logs", userCount: 15, permissions: ["users.view", "users.update", "transactions.view", "support.write"] },
-  { id: "R-4", name: "Risk Manager", description: "Flag transactions, suspend suspicious user accounts, set platform limits", userCount: 3, permissions: ["users.suspend", "transactions.flag", "transactions.view", "limits.write"] }
+const ROLE_INFO = [
+  { role: "super_admin", title: "Super admin", body: "Everything an admin can do, plus managing other administrators and their roles. Set through the ADMIN_EMAIL / ADMIN_PASSWORD deployment settings." },
+  { role: "admin", title: "Admin", body: "Customer management, balance adjustments, account freezes, loan and verification decisions, investment valuations and the support inbox." },
+  { role: "customer", title: "Customer", body: "Their own accounts, payments, loans, investments, crypto and support chat. Nothing else." },
 ];
 
-const availablePermissions = [
-  { key: "users.view", label: "View User Profiles" },
-  { key: "users.update", label: "Update User details" },
-  { key: "users.suspend", label: "Freeze/Suspend Accounts" },
-  { key: "transactions.view", label: "View Transaction History" },
-  { key: "transactions.flag", label: "Flag / Monitor Risk Scoring" },
-  { key: "kyc.review", label: "Review & Approve Documents" },
-  { key: "limits.write", label: "Edit Lending & Transfer Limits" },
-  { key: "audit.view", label: "View Audit Logs" },
-  { key: "reports.generate", label: "Generate Compliance Reports" },
-  { key: "system.write", label: "Modify Platform Configurations" }
-];
+export default function RolesPage() {
+  const { user: me } = useSessionContext();
+  const isSuper = me?.role === "super_admin";
+  const staff = useAsync(async () => {
+    const [admins, supers] = await Promise.all([adminApi.getUsers({ role: "admin", limit: 100 }), adminApi.getUsers({ role: "super_admin", limit: 100 })]);
+    return [...supers.users, ...admins.users] as any[];
+  });
 
-export default function AdminRolesPage() {
-  const [roles, setRoles] = useState<Role[]>(initialRoles);
-  const [showAddRole, setShowAddRole] = useState(false);
-  const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
-  const [newRole, setNewRole] = useState({ name: "", description: "", permissions: [] as string[] });
+  const [search, setSearch] = useState("");
+  const [q, setQ] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setQ(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+  const results = useAsync(() => (q.length >= 2 ? adminApi.getUsers({ search: q, role: "customer", limit: 8 }) : Promise.resolve({ users: [] })), [q]);
 
-  const handleTogglePermission = (permKey: string) => {
-    setNewRole(prev => {
-      const exists = prev.permissions.includes(permKey);
-      return {
-        ...prev,
-        permissions: exists 
-          ? prev.permissions.filter(k => k !== permKey) 
-          : [...prev.permissions, permKey]
-      };
-    });
-  };
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ tone: "success" | "danger"; text: string } | null>(null);
 
-  const handleAddRole = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (editingRoleId) {
-      setRoles(prev => prev.map(r => r.id === editingRoleId
-        ? { ...r, name: newRole.name, description: newRole.description, permissions: newRole.permissions }
-        : r
-      ));
-    } else {
-      setRoles(prev => [...prev, {
-        id: `R-${prev.length + 1}`,
-        name: newRole.name,
-        description: newRole.description,
-        userCount: 0,
-        permissions: newRole.permissions,
-      }]);
+  async function setRole(u: any, role: "admin" | "customer") {
+    const verb = role === "admin" ? `Give ${u.fullName} admin access?` : `Remove admin access from ${u.fullName}?`;
+    if (!confirm(verb)) return;
+    setBusy(u.id);
+    setMsg(null);
+    try {
+      await adminApi.updateUserRole(u.id, role);
+      setMsg({ tone: "success", text: role === "admin" ? `${u.fullName} is now an admin.` : `${u.fullName} is now a customer.` });
+      staff.reload({ silent: true });
+      results.reload({ silent: true });
+    } catch (e: any) {
+      setMsg({ tone: "danger", text: e.message });
+    } finally {
+      setBusy(null);
     }
-    setShowAddRole(false);
-    setEditingRoleId(null);
-    setNewRole({ name: "", description: "", permissions: [] });
-  };
-
-  const handleEditRole = (role: Role) => {
-    setEditingRoleId(role.id);
-    setNewRole({ name: role.name, description: role.description, permissions: [...role.permissions] });
-    setShowAddRole(true);
-  };
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="font-display font-bold text-brand-secondary text-2xl">Access Control & Roles</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Manage administrative levels, assign roles, and define strict RBAC rules.</p>
-        </div>
-        <button
-          onClick={() => setShowAddRole(true)}
-          className="btn-primary text-sm px-4 py-2.5"
-        >
-          <Plus className="w-4 h-4" />
-          Create Security Role
-        </button>
-      </div>
+    <div>
+      <PageHeader title="Team & roles" description="Who can access the admin console, and what each role can do." />
+      {msg && <Alert tone={msg.tone} className="mb-4">{msg.text}</Alert>}
 
-      {/* Role Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {roles.map((role) => (
-          <div key={role.id} className="dashboard-card flex flex-col justify-between">
-            <div>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center">
-                    <Shield className="w-5 h-5 text-brand-primary" />
+      <div className="grid gap-6 xl:grid-cols-[1.4fr_1fr]">
+        <div className="space-y-6">
+          <Card className="overflow-hidden">
+            <CardHeader title="Administrators" icon={<ShieldCheck className="size-4" />} description={isSuper ? "You can grant and remove admin access." : "Only a super admin can change roles."} />
+            <ul className="mt-3 divide-y divide-line border-t border-line">
+              {staff.loading && <li className="px-6 py-4"><Skeleton className="h-6" /></li>}
+              {staff.data?.map((u) => (
+                <li key={u.id} className="flex items-center gap-3 px-5 py-3 sm:px-6">
+                  <Avatar name={u.fullName} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">
+                      {u.fullName} {u.id === me?.id && <span className="text-fg-subtle">(you)</span>}
+                    </p>
+                    <p className="truncate text-xs text-fg-subtle">
+                      {u.email} · since {formatDate(u.createdAt)}
+                    </p>
                   </div>
-                  <div>
-                    <h2 className="font-display font-bold text-brand-secondary text-base">{role.name}</h2>
-                    <span className="font-mono text-[10px] text-gray-400 font-semibold">{role.id}</span>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5 text-xs text-gray-500 bg-gray-50 px-2.5 py-1 rounded-full font-medium">
-                  <Users className="w-3.5 h-3.5" />
-                  {role.userCount} Active Operators
-                </div>
-              </div>
-              
-              <p className="text-gray-500 text-sm mt-4 leading-relaxed">{role.description}</p>
-              
-              <div className="mt-5 space-y-2">
-                <div className="text-xs text-gray-400 font-semibold uppercase tracking-wider">Access Privileges</div>
-                <div className="flex flex-wrap gap-1.5 pt-1">
-                  {role.permissions.includes("*") ? (
-                    <span className="px-2 py-0.5 rounded bg-red-50 text-red-700 text-xs font-semibold flex items-center gap-1">
-                      <Key className="w-3 h-3" />
-                      All Permissions (*)
-                    </span>
-                  ) : (
-                    role.permissions.map(perm => (
-                      <span key={perm} className="px-2 py-0.5 rounded bg-gray-100 text-gray-600 text-xs font-medium font-mono">
-                        {perm}
-                      </span>
-                    ))
+                  <Badge tone={u.role === "super_admin" ? "dark" : "brand"}>{u.role === "super_admin" ? "Super admin" : "Admin"}</Badge>
+                  {isSuper && u.role === "admin" && (
+                    <Button size="sm" variant="ghost" loading={busy === u.id} onClick={() => setRole(u, "customer")}>
+                      Remove
+                    </Button>
                   )}
-                </div>
-              </div>
-            </div>
+                </li>
+              ))}
+            </ul>
+          </Card>
 
-            <div className="border-t border-gray-100 pt-4 mt-6 flex justify-between items-center">
-              <span className="text-xs text-gray-400 flex items-center gap-1">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-                ISO 27001 Compliant Rule
-              </span>
-              <button
-                onClick={() => handleEditRole(role)}
-                className="text-xs text-brand-primary font-semibold hover:underline"
-              >
-                Edit Privileges
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Add Role Dialog Form */}
-      {showAddRole && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl animate-fade-in max-h-[90vh] overflow-y-auto">
-            <h2 className="font-display font-bold text-brand-secondary text-lg mb-2">{editingRoleId ? "Edit Security Role" : "Create Security Role"}</h2>
-            <p className="text-gray-500 text-xs mb-4">Define a new access tier for support or compliance operators.</p>
-            
-            <form onSubmit={handleAddRole} className="space-y-4">
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Role Name</label>
-                <input
-                  type="text"
-                  required
-                  className="form-input"
-                  placeholder="e.g. Risk Auditor"
-                  value={newRole.name}
-                  onChange={(e) => setNewRole({ ...newRole, name: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-1">Description</label>
-                <textarea
-                  required
-                  rows={2}
-                  className="form-input"
-                  placeholder="Summarize the core duties of this role..."
-                  value={newRole.description}
-                  onChange={(e) => setNewRole({ ...newRole, description: e.target.value })}
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-700 mb-2">Select Permissions</label>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1 border border-gray-100 rounded-xl bg-gray-50">
-                  {availablePermissions.map((perm) => {
-                    const isChecked = newRole.permissions.includes(perm.key);
-                    return (
-                      <div
-                        key={perm.key}
-                        onClick={() => handleTogglePermission(perm.key)}
-                        className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors border ${
-                          isChecked ? "bg-brand-primary/10 border-brand-primary text-brand-primary" : "bg-white border-gray-200 text-gray-600 hover:border-gray-300"
-                        }`}
-                      >
-                        <div className={`w-4 h-4 rounded border flex items-center justify-center ${isChecked ? "bg-brand-primary border-brand-primary" : "border-gray-300 bg-white"}`}>
-                          {isChecked && <Check className="w-3 h-3 text-white" />}
-                        </div>
-                        <div className="text-xs">
-                          <div className="font-semibold">{perm.label}</div>
-                          <div className="text-[10px] opacity-75 font-mono">{perm.key}</div>
-                        </div>
+          {isSuper && (
+            <Card>
+              <CardHeader title="Grant admin access" description="Search for an existing customer." icon={<UserCog className="size-4" />} />
+              <div className="p-6">
+                <Input placeholder="Name or email" value={search} onChange={(e) => setSearch(e.target.value)} leading={<Search className="size-4" />} aria-label="Search customers" />
+                <ul className="mt-3 divide-y divide-line">
+                  {q.length >= 2 && !results.loading && results.data?.users.length === 0 && <EmptyState title="No customers found" className="py-6" />}
+                  {results.data?.users.map((u: any) => (
+                    <li key={u.id} className="flex items-center gap-3 py-3">
+                      <Avatar name={u.fullName} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">{u.fullName}</p>
+                        <p className="truncate text-xs text-fg-subtle">{u.email}</p>
                       </div>
-                    );
-                  })}
-                </div>
+                      <Button size="sm" variant="secondary" loading={busy === u.id} onClick={() => setRole(u, "admin")}>
+                        Make admin
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
               </div>
-
-              <div className="flex gap-3 pt-4 border-t border-gray-100">
-                <button
-                  type="button"
-                  onClick={() => { setShowAddRole(false); setEditingRoleId(null); setNewRole({ name: "", description: "", permissions: [] }); }}
-                  className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-600 rounded-xl hover:bg-gray-50 text-sm font-semibold transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 btn-primary text-sm py-2.5"
-                >
-                  {editingRoleId ? "Save Changes" : "Create Role"}
-                </button>
-              </div>
-            </form>
-          </div>
+            </Card>
+          )}
         </div>
-      )}
 
-      {/* Permission Matrix Info Section */}
-      <div className="dashboard-card bg-gradient-to-r from-brand-secondary to-brand-muted text-white">
-        <div className="flex items-start gap-4">
-          <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center flex-shrink-0">
-            <AlertCircle className="w-5 h-5 text-brand-primary" />
-          </div>
-          <div>
-            <h3 className="font-display font-bold text-base">Principle of Least Privilege (PoLP)</h3>
-            <p className="text-gray-300 text-sm mt-1 leading-relaxed max-w-2xl">
-              Intercontinental Crest enforces strict role segregation. Security audits occur monthly, logging and reviewing all administrative actions to satisfy PCI-DSS and SOC 2 requirements. Ensure operators only have matching access permissions.
+        <Card>
+          <CardHeader title="What each role can do" />
+          <div className="space-y-5 p-6">
+            {ROLE_INFO.map((r) => (
+              <div key={r.role}>
+                <p className="text-sm font-semibold">{r.title}</p>
+                <p className="mt-1 text-sm leading-relaxed text-fg-muted">{r.body}</p>
+              </div>
+            ))}
+            <p className="rounded-xl bg-surface p-4 text-xs leading-relaxed text-fg-subtle">
+              Roles are checked by the server on every request, not just hidden in the menu. Role changes take effect immediately and are recorded in the audit log.
             </p>
           </div>
-        </div>
+        </Card>
       </div>
     </div>
   );

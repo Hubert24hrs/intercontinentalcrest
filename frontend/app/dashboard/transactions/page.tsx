@@ -1,293 +1,173 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import {
-  Search, Download, ArrowUpRight, ArrowDownLeft,
-  ChevronLeft, ChevronRight, Loader2, TrendingUp, TrendingDown,
-  Coins, ArrowLeftRight, RefreshCw, Activity
-} from "lucide-react";
-import { transactionsApi, cryptoApi } from "@/lib/api";
-import { motion, AnimatePresence } from "framer-motion";
+import { useMemo, useState } from "react";
+import { ArrowDownLeft, ArrowUpRight, Download, ListOrdered, Search } from "lucide-react";
+import { accountsApi, transactionsApi } from "@/lib/api";
+import { useAsync } from "@/lib/useAsync";
+import { accountLabel, formatDateTime, formatMoney, maskAccount, toNumber, TX_TYPE_LABEL } from "@/lib/format";
+import { downloadCsv } from "@/lib/csv";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Field";
+import { Modal } from "@/components/ui/Modal";
+import { StatusBadge } from "@/components/ui/Badge";
+import { EmptyState, PageHeader, Segmented, Skeleton, StatCard, DefinitionRow } from "@/components/ui/misc";
+import { TxRow, signedAmount, type Tx } from "@/components/app/TxRow";
+import { queryParam } from "@/lib/url";
 
-const PAGE_SIZE = 15;
-type TxSource = "all" | "bank" | "crypto";
-type TxFlow   = "all" | "credit" | "debit";
-
-function normaliseBankTx(tx: any) {
-  return {
-    id: tx.id, source: "bank" as const,
-    reference: tx.transactionReference,
-    description: tx.description || "Fund Transfer",
-    subLabel: tx.type?.replace(/_/g, " ").toUpperCase(),
-    amount: parseFloat(tx.amount), fee: parseFloat(tx.fee || "0"),
-    flow: (tx.flow || (tx.type === "credit" || tx.type === "admin_credit" || tx.type === "crypto_deposit" ? "credit" : "debit")) as TxFlow,
-    status: tx.status || "completed", date: new Date(tx.createdAt), raw: tx,
-  };
-}
-
-function normaliseCryptoTx(order: any) {
-  const isBuy = order.type === "buy";
-  return {
-    id: order.id, source: "crypto" as const,
-    reference: order.id.slice(0, 8).toUpperCase(),
-    description: `${isBuy ? "Bought" : "Sold"} ${order.coinName} (${order.coinSymbol?.toUpperCase()})`,
-    subLabel: `${parseFloat(order.quantity).toFixed(6)} ${order.coinSymbol?.toUpperCase()} @ $${parseFloat(order.priceAtTime).toLocaleString("en-US", { maximumFractionDigits: 2 })}`,
-    amount: parseFloat(order.totalUsd), fee: parseFloat(order.fee || "0"),
-    flow: isBuy ? "debit" : "credit",
-    status: order.status || "completed", date: new Date(order.createdAt),
-    coinSymbol: order.coinSymbol, coinName: order.coinName, raw: order,
-  };
-}
+const PAGE = 25;
 
 export default function TransactionsPage() {
-  const [bankTxs, setBankTxs]         = useState<any[]>([]);
-  const [cryptoOrders, setCryptoOrders] = useState<any[]>([]);
-  const [loading, setLoading]         = useState(true);
-  const [refreshing, setRefreshing]   = useState(false);
-  const [sourceFilter, setSourceFilter] = useState<TxSource>("all");
-  const [flowFilter, setFlowFilter]   = useState<TxFlow>("all");
-  const [search, setSearch]           = useState("");
-  const [page, setPage]               = useState(1);
+  const [accountId, setAccountIdRaw] = useState(() => queryParam("account") || "");
+  const [flow, setFlowRaw] = useState<"all" | "credit" | "debit">("all");
+  const [query, setQueryRaw] = useState("");
+  const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<Tx | null>(null);
+  // Changing a filter always returns to the first page.
+  const setAccountId = (v: string) => (setAccountIdRaw(v), setPage(1));
+  const setFlow = (v: "all" | "credit" | "debit") => (setFlowRaw(v), setPage(1));
+  const setQuery = (v: string) => (setQueryRaw(v), setPage(1));
 
-  async function loadAll(silent = false) {
-    if (!silent) setLoading(true); else setRefreshing(true);
-    try {
-      const [bankRes, cryptoRes] = await Promise.allSettled([
-        transactionsApi.getTransactions({ page: 1, limit: 200 }),
-        cryptoApi.getMyOrders(1, 200),
-      ]);
-      if (bankRes.status === "fulfilled") setBankTxs(bankRes.value.transactions || []);
-      if (cryptoRes.status === "fulfilled") setCryptoOrders(cryptoRes.value.orders || []);
-    } catch (err) {
-      console.error("Failed to load transactions", err);
-    } finally {
-      setLoading(false); setRefreshing(false);
+  const accounts = useAsync(() => accountsApi.getAccounts() as Promise<any[]>);
+  const { data, loading, error } = useAsync(
+    () => transactionsApi.getTransactions({ limit: 200, accountId: accountId || undefined }) as Promise<{ transactions: Tx[]; total: number }>,
+    [accountId],
+  );
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return (data?.transactions ?? []).filter((t) => {
+      if (flow === "credit" && t.flow !== "credit") return false;
+      if (flow === "debit" && t.flow !== "debit") return false;
+      if (!q) return true;
+      return [t.description, t.transactionReference, TX_TYPE_LABEL[t.type], t.senderAccount?.accountNumber, t.receiverAccount?.accountNumber]
+        .filter(Boolean)
+        .some((s) => String(s).toLowerCase().includes(q));
+    });
+  }, [data, flow, query]);
+
+  const summary = useMemo(() => {
+    let inflow = 0;
+    let outflow = 0;
+    for (const t of filtered) {
+      if (t.flow === "credit") inflow += toNumber(t.amount);
+      else if (t.flow === "debit") outflow += toNumber(t.amount) + toNumber(t.fee);
     }
-  }
-
-  useEffect(() => { loadAll(); }, []);
-
-  const unified = useMemo(() => [
-    ...bankTxs.map(normaliseBankTx),
-    ...cryptoOrders.map(normaliseCryptoTx),
-  ].sort((a, b) => b.date.getTime() - a.date.getTime()), [bankTxs, cryptoOrders]);
-
-  const filtered = useMemo(() => unified.filter((tx) => {
-    if (sourceFilter !== "all" && tx.source !== sourceFilter) return false;
-    if (flowFilter !== "all" && tx.flow !== flowFilter) return false;
-    if (search) {
-      const q = search.toLowerCase();
-      if (!tx.description.toLowerCase().includes(q) && !tx.reference.toLowerCase().includes(q) && !('coinSymbol' in tx && (tx as any).coinSymbol?.toLowerCase().includes(q))) return false;
-    }
-    return true;
-  }), [unified, sourceFilter, flowFilter, search]);
-
-  const totalFiltered = filtered.length;
-  const totalFilteredPages = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE));
-  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-
-  const summaries = useMemo(() => {
-    let credits = 0, debits = 0;
-    filtered.forEach(tx => { if (tx.flow === "credit") credits += tx.amount; else debits += tx.amount; });
-    return { credits, debits, net: credits - debits, count: filtered.length };
+    return { inflow, outflow };
   }, [filtered]);
 
-  const handleExportCSV = () => {
-    if (filtered.length === 0) return;
-    const headers = ["ID", "Source", "Reference", "Description", "Type", "Amount (USD)", "Fee", "Status", "Date"];
-    const rows = filtered.map(t => [t.id, t.source, t.reference, t.description, t.flow, t.amount.toFixed(2), t.fee.toFixed(2), t.status, t.date.toLocaleDateString()]);
-    const csv = "data:text/csv;charset=utf-8," + [headers.join(","), ...rows.map(r => r.map(v => `"${v}"`).join(","))].join("\n");
-    const link = document.createElement("a");
-    link.setAttribute("href", encodeURI(csv));
-    link.setAttribute("download", `ic_transactions_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link); link.click(); document.body.removeChild(link);
-  };
+  const pageItems = filtered.slice((page - 1) * PAGE, page * PAGE);
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE));
 
-  const applyFilter = (fn: () => void) => { fn(); setPage(1); };
+  function exportCsv() {
+    downloadCsv(
+      `transactions-${new Date().toISOString().slice(0, 10)}.csv`,
+      ["Date", "Reference", "Description", "Type", "Direction", "Amount", "Fee", "Status"],
+      filtered.map((t) => [
+        new Date(t.createdAt).toISOString(),
+        t.transactionReference,
+        t.description || "",
+        TX_TYPE_LABEL[t.type] || t.type,
+        t.flow || "",
+        toNumber(t.amount).toFixed(2),
+        toNumber(t.fee).toFixed(2),
+        t.status,
+      ]),
+    );
+  }
 
   return (
-    <div className="space-y-6 max-w-5xl mx-auto">
-      {/* Header */}
-      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }} className="flex items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-brand-primary to-[#0078B3] flex items-center justify-center shadow-lg flex-shrink-0">
-            <Activity className="w-5 h-5 text-white" />
-          </div>
-          <div>
-            <h1 className="font-display font-bold text-brand-secondary text-2xl">Transaction History</h1>
-            <p className="text-gray-500 text-sm mt-0.5">All banking & crypto activity in one unified ledger</p>
-          </div>
-        </div>
-        <div className="flex gap-2 flex-shrink-0">
-          <button onClick={() => loadAll(true)} disabled={refreshing} className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-white border border-gray-200 text-sm text-gray-600 hover:border-brand-primary transition-colors shadow-sm disabled:opacity-50">
-            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
-          </button>
-          <button onClick={handleExportCSV} disabled={filtered.length === 0} className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-gray-200 text-sm text-gray-600 hover:border-brand-primary transition-colors shadow-sm disabled:opacity-50">
-            <Download className="w-4 h-4" />Export CSV
-          </button>
-        </div>
-      </motion.div>
+    <div>
+      <PageHeader
+        title="Transactions"
+        description="Everything that has moved in or out of your accounts."
+        actions={
+          <Button variant="secondary" onClick={exportCsv} disabled={!filtered.length}>
+            <Download className="size-4" /> Export CSV
+          </Button>
+        }
+      />
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[
-          { label: "Total Entries", value: summaries.count.toString(), colorClass: "text-brand-secondary", bg: "bg-white", border: "border-gray-100", icon: ArrowLeftRight },
-          { label: "Money In", value: `+$${summaries.credits.toLocaleString("en-US", { minimumFractionDigits: 2 })}`, colorClass: "text-emerald-600", bg: "bg-emerald-50", border: "border-emerald-100", icon: TrendingUp },
-          { label: "Money Out", value: `-$${summaries.debits.toLocaleString("en-US", { minimumFractionDigits: 2 })}`, colorClass: "text-red-500", bg: "bg-red-50", border: "border-red-100", icon: TrendingDown },
-          { label: "Net Flow", value: `${summaries.net >= 0 ? "+" : ""}$${Math.abs(summaries.net).toLocaleString("en-US", { minimumFractionDigits: 2 })}`, colorClass: summaries.net >= 0 ? "text-brand-primary" : "text-red-500", bg: "bg-brand-primary/5", border: "border-brand-primary/10", icon: Coins },
-        ].map((s, i) => (
-          <motion.div key={s.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }} className={`${s.bg} border ${s.border} rounded-2xl p-4 shadow-sm`}>
-            <div className="flex items-center gap-1.5 mb-1.5">
-              <s.icon className={`w-3.5 h-3.5 ${s.colorClass}`} />
-              <div className="text-[10px] text-gray-500 font-semibold uppercase tracking-wide">{s.label}</div>
-            </div>
-            <div className={`font-display font-bold text-lg leading-tight ${s.colorClass}`}>{s.value}</div>
-          </motion.div>
-        ))}
+      <div className="mb-6 grid gap-4 sm:grid-cols-3">
+        <StatCard label="Money in" value={formatMoney(summary.inflow)} icon={<ArrowDownLeft className="size-4" />} tone="success" />
+        <StatCard label="Money out" value={formatMoney(summary.outflow)} icon={<ArrowUpRight className="size-4" />} tone="ink" />
+        <StatCard label="Transactions" value={filtered.length.toLocaleString()} icon={<ListOrdered className="size-4" />} tone="brand" />
       </div>
 
-      {/* Filters */}
-      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm space-y-3">
-        <div className="flex flex-wrap gap-1.5">
-          {(["all", "bank", "crypto"] as TxSource[]).map(s => (
-            <button key={s} onClick={() => applyFilter(() => setSourceFilter(s))}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all capitalize ${sourceFilter === s ? s === "crypto" ? "bg-indigo-600 text-white shadow-md" : "bg-brand-primary text-white shadow-md" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
-              {s === "crypto" && <Coins className="w-3.5 h-3.5" />}
-              {s === "bank" && <ArrowLeftRight className="w-3.5 h-3.5" />}
-              {s === "all" ? "All Activity" : s === "bank" ? "Bank Transfers" : "Crypto Trades"}
-            </button>
-          ))}
-          <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
-            {(["all", "credit", "debit"] as TxFlow[]).map(f => (
-              <button key={f} onClick={() => applyFilter(() => setFlowFilter(f))}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${flowFilter === f ? "bg-brand-secondary text-white shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-                {f === "all" ? "All" : f === "credit" ? "Money In" : "Money Out"}
-              </button>
+      <Card className="overflow-hidden">
+        <div className="flex flex-col gap-3 border-b border-line p-4 sm:p-5 lg:flex-row lg:items-center">
+          <Input
+            wrapperClassName="flex-1"
+            placeholder="Search description, reference or account"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            leading={<Search className="size-4" />}
+            aria-label="Search transactions"
+          />
+          <Select value={accountId} onChange={(e) => setAccountId(e.target.value)} aria-label="Account" wrapperClassName="lg:w-64">
+            <option value="">All accounts</option>
+            {(accounts.data ?? []).map((a) => (
+              <option key={a.id} value={a.id}>
+                {accountLabel(a)} {maskAccount(a.accountNumber)}
+              </option>
             ))}
-          </div>
-          <div className="relative flex-1 min-w-[200px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
-            <input type="text" value={search} onChange={e => applyFilter(() => setSearch(e.target.value))} placeholder="Search by name, coin, reference..." className="w-full pl-8 pr-4 py-2 border border-gray-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-brand-primary/20 focus:border-brand-primary transition-colors" />
-          </div>
-        </div>
-      </motion.div>
-
-      {/* Transaction List */}
-      <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
-        <div className="px-5 py-3.5 border-b border-gray-100 flex items-center justify-between">
-          <h3 className="font-display font-bold text-brand-secondary text-sm">
-            {sourceFilter === "crypto" ? "Crypto Trade Ledger" : sourceFilter === "bank" ? "Bank Ledger" : "Unified Ledger"}
-          </h3>
-          <span className="text-[10px] text-gray-400 font-semibold bg-gray-100 px-2 py-0.5 rounded-full">{totalFiltered} records</span>
+          </Select>
+          <Segmented
+            value={flow}
+            onChange={setFlow}
+            options={[
+              { value: "all", label: "All" },
+              { value: "credit", label: "In" },
+              { value: "debit", label: "Out" },
+            ]}
+          />
         </div>
 
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 text-gray-400">
-            <Loader2 className="w-8 h-8 animate-spin text-brand-primary mb-2" />
-            <span className="text-xs">Loading transactions...</span>
-          </div>
-        ) : paginated.length === 0 ? (
-          <div className="py-14 text-center">
-            <Activity className="w-10 h-10 text-gray-200 mx-auto mb-3" />
-            <p className="text-gray-400 text-sm">No transactions found for the selected filters.</p>
-          </div>
-        ) : (
-          <>
-            {/* Desktop table */}
-            <div className="hidden md:block overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="text-[10px] text-gray-400 border-b border-gray-100 text-left font-bold uppercase tracking-wide">
-                    <th className="py-3 px-5">Transaction</th>
-                    <th className="py-3 pr-4">Reference</th>
-                    <th className="py-3 pr-4">Date</th>
-                    <th className="py-3 pr-4">Status</th>
-                    <th className="py-3 pr-5 text-right">Amount</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-50">
-                  {paginated.map((tx, i) => (
-                    <motion.tr
-                      key={`${tx.source}-${tx.id}`}
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.15, delay: i * 0.02 }}
-                      className="hover:bg-gray-50/60 transition-colors"
-                    >
-                      <td className="py-3.5 px-5">
-                        <div className="flex items-center gap-3">
-                          <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 ${tx.source === "crypto" ? tx.flow === "debit" ? "bg-indigo-100" : "bg-purple-100" : tx.flow === "credit" ? "bg-emerald-100" : "bg-red-100"}`}>
-                            {tx.source === "crypto" ? tx.flow === "debit" ? <TrendingDown className="w-4 h-4 text-indigo-600" /> : <TrendingUp className="w-4 h-4 text-purple-600" /> : tx.flow === "credit" ? <ArrowDownLeft className="w-4 h-4 text-emerald-600" /> : <ArrowUpRight className="w-4 h-4 text-red-500" />}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="font-semibold text-brand-secondary text-sm leading-tight">{tx.description}</div>
-                            <div className="flex items-center gap-1.5 mt-0.5">
-                              {tx.source === "crypto" && <span className="text-[9px] bg-indigo-50 text-indigo-600 border border-indigo-100 px-1.5 py-0.5 rounded-full font-bold uppercase">Crypto</span>}
-                              <div className="text-gray-400 text-[10px] truncate">{tx.subLabel}</div>
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="py-3.5 pr-4 text-gray-400 text-[11px] font-mono">{tx.reference}</td>
-                      <td className="py-3.5 pr-4 text-gray-500 text-xs">
-                        {tx.date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                        <div className="text-[10px] text-gray-400">{tx.date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</div>
-                      </td>
-                      <td className="py-3.5 pr-4">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${tx.status === "completed" ? "bg-emerald-50 text-emerald-700 border border-emerald-100" : tx.status === "failed" ? "bg-red-50 text-red-600 border border-red-100" : "bg-amber-50 text-amber-700 border border-amber-100"}`}>
-                          {tx.status}
-                        </span>
-                      </td>
-                      <td className={`py-3.5 pr-5 text-right font-display font-bold text-sm ${tx.flow === "credit" ? "text-emerald-600" : "text-red-500"}`}>
-                        {tx.flow === "credit" ? "+" : "−"}${tx.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                        {tx.fee > 0 && <div className="text-[9px] text-gray-400 font-normal">Fee: ${tx.fee.toFixed(2)}</div>}
-                      </td>
-                    </motion.tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+        <div className="divide-y divide-line">
+          {loading && [0, 1, 2, 3, 4].map((i) => <div key={i} className="px-6 py-4"><Skeleton className="h-6" /></div>)}
+          {!loading && error && <p className="px-6 py-6 text-sm text-danger-600">{error}</p>}
+          {!loading && !error && filtered.length === 0 && (
+            <EmptyState icon={<ListOrdered className="size-5" />} title="No matching transactions" description="Try a different search or filter." />
+          )}
+          {pageItems.map((t) => (
+            <TxRow key={t.id} tx={t} onClick={() => setSelected(t)} />
+          ))}
+        </div>
 
-            {/* Mobile cards */}
-            <div className="md:hidden divide-y divide-gray-50">
-              {paginated.map((tx, i) => (
-                <motion.div key={`m-${tx.source}-${tx.id}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.03 }} className="flex items-center gap-3 px-4 py-3.5">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 ${tx.source === "crypto" ? tx.flow === "debit" ? "bg-indigo-100" : "bg-purple-100" : tx.flow === "credit" ? "bg-emerald-100" : "bg-red-100"}`}>
-                    {tx.source === "crypto" ? tx.flow === "debit" ? <TrendingDown className="w-4 h-4 text-indigo-600" /> : <TrendingUp className="w-4 h-4 text-purple-600" /> : tx.flow === "credit" ? <ArrowDownLeft className="w-4 h-4 text-emerald-600" /> : <ArrowUpRight className="w-4 h-4 text-red-500" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-brand-secondary text-sm leading-tight truncate">{tx.description}</div>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      {tx.source === "crypto" && <span className="text-[9px] bg-indigo-50 text-indigo-600 border border-indigo-100 px-1.5 py-0.5 rounded-full font-bold">CRYPTO</span>}
-                      <span className="text-[10px] text-gray-400">{tx.date.toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-                    </div>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <div className={`font-display font-bold text-sm ${tx.flow === "credit" ? "text-emerald-600" : "text-red-500"}`}>
-                      {tx.flow === "credit" ? "+" : "−"}${tx.amount.toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                    </div>
-                    <span className={`text-[10px] font-bold ${tx.status === "completed" ? "text-emerald-600" : tx.status === "failed" ? "text-red-500" : "text-amber-600"}`}>{tx.status}</span>
-                  </div>
-                </motion.div>
-              ))}
-            </div>
-          </>
-        )}
-
-        {!loading && totalFilteredPages > 1 && (
-          <div className="flex items-center justify-between px-5 py-3.5 border-t border-gray-100">
-            <span className="text-xs text-gray-500">Page {page} of {totalFilteredPages} · {totalFiltered} records</span>
-            <div className="flex gap-1.5">
-              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="p-2 rounded-lg hover:bg-gray-100 disabled:opacity-40 transition-colors">
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button onClick={() => setPage(p => Math.min(totalFilteredPages, p + 1))} disabled={page === totalFilteredPages} className="p-2 rounded-lg hover:bg-gray-100 disabled:opacity-40 transition-colors">
-                <ChevronRight className="w-4 h-4" />
-              </button>
+        {pages > 1 && (
+          <div className="flex items-center justify-between border-t border-line px-5 py-3 text-sm">
+            <span className="text-fg-subtle">
+              Page {page} of {pages}
+            </span>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" disabled={page === 1} onClick={() => setPage((p) => p - 1)}>
+                Previous
+              </Button>
+              <Button variant="secondary" size="sm" disabled={page === pages} onClick={() => setPage((p) => p + 1)}>
+                Next
+              </Button>
             </div>
           </div>
         )}
-      </div>
+      </Card>
+
+      <Modal open={!!selected} onOpenChange={(o) => !o && setSelected(null)} title="Transaction details">
+        {selected && (
+          <div>
+            <p className="num text-3xl font-semibold tracking-tight">{signedAmount(selected).text}</p>
+            <p className="mt-1 text-sm text-fg-subtle">{selected.description || TX_TYPE_LABEL[selected.type]}</p>
+            <dl className="mt-6 divide-y divide-line">
+              <DefinitionRow label="Status" value={<StatusBadge status={selected.status} />} />
+              <DefinitionRow label="Type" value={TX_TYPE_LABEL[selected.type] || selected.type} />
+              <DefinitionRow label="Date" value={formatDateTime(selected.createdAt)} />
+              <DefinitionRow label="Reference" value={selected.transactionReference} mono />
+              {selected.senderAccount && <DefinitionRow label="From account" value={selected.senderAccount.accountNumber} mono />}
+              {selected.receiverAccount && <DefinitionRow label="To account" value={selected.receiverAccount.accountNumber} mono />}
+              {toNumber(selected.fee) > 0 && <DefinitionRow label="Fee" value={formatMoney(selected.fee)} />}
+            </dl>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

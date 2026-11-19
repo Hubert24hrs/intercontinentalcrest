@@ -1,0 +1,4 @@
+# Intercontinental Crest is a demonstration platform, not a bank.
+# Keep it out of search results so nobody mistakes it for a real financial institution.
+User-agent: *
+Disallow: /

@@ -1,116 +1,63 @@
-import {
-  Controller,
-  Get,
-  Post,
-  Patch,
-  Body,
-  Param,
-  Query,
-  UseGuards,
-  Req,
-  ForbiddenException,
-  BadRequestException,
-} from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Req, ParseUUIDPipe } from '@nestjs/common';
+import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { Transform } from 'class-transformer';
 import { SupportService } from './support.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { ADMIN_ROLES, Roles } from '../auth/roles.decorator';
+import { clampInt } from '../common/pagination';
+
+class MessageDto {
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @IsNotEmpty({ message: 'Message content is required' })
+  @MaxLength(2000, { message: 'Messages are limited to 2,000 characters' })
+  content: string;
+}
 
 @Controller()
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 export class SupportController {
   constructor(private readonly supportService: SupportService) {}
 
-  // ─── Helpers ─────────────────────────────────────────────────────────────
-
-  private checkAdmin(req: any) {
-    if (req.user.role !== 'admin' && req.user.role !== 'super_admin') {
-      throw new ForbiddenException('Admin access required');
-    }
-  }
-
-  // ─── Customer endpoints (/support/conversations) ──────────────────────────
-
+  // ── Customer (/support/conversations) ────────────────────────────────────
   @Post('support/conversations')
   async getOrCreateConversation(@Req() req: any) {
     return this.supportService.getOrCreateConversation(req.user.id);
   }
 
   @Get('support/conversations/:id/messages')
-  async getCustomerMessages(
-    @Req() req: any,
-    @Param('id') id: string,
-    @Query('page') page: string = '1',
-    @Query('limit') limit: string = '100',
-  ) {
-    return this.supportService.getMessagesForCustomer(
-      id,
-      req.user.id,
-      parseInt(page, 10),
-      parseInt(limit, 10),
-    );
+  async getCustomerMessages(@Req() req: any, @Param('id', new ParseUUIDPipe()) id: string, @Query('limit') limit?: string) {
+    return this.supportService.getMessagesForCustomer(id, req.user.id, clampInt(limit, 100, 1, 200));
   }
 
   @Post('support/conversations/:id/messages')
-  async sendCustomerMessage(
-    @Req() req: any,
-    @Param('id') id: string,
-    @Body('content') content: string,
-  ) {
-    if (!content?.trim()) {
-      throw new BadRequestException('Message content is required');
-    }
-    return this.supportService.sendMessageAsCustomer(
-      id,
-      req.user.id,
-      content.trim(),
-    );
+  async sendCustomerMessage(@Req() req: any, @Param('id', new ParseUUIDPipe()) id: string, @Body() dto: MessageDto) {
+    return this.supportService.sendMessageAsCustomer(id, req.user.id, dto.content);
   }
 
-  // ─── Admin endpoints (/admin/support/conversations) ───────────────────────
-
+  // ── Admin (/admin/support/conversations) ─────────────────────────────────
   @Get('admin/support/conversations')
-  async getAllConversations(
-    @Req() req: any,
-    @Query('page') page: string = '1',
-    @Query('limit') limit: string = '30',
-  ) {
-    this.checkAdmin(req);
-    return this.supportService.getAllConversations(
-      parseInt(page, 10),
-      parseInt(limit, 10),
-    );
+  @Roles(...ADMIN_ROLES)
+  async getAllConversations(@Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.supportService.getAllConversations(clampInt(page, 1, 1, 10_000), clampInt(limit, 30, 1, 100));
   }
 
   @Get('admin/support/conversations/:id/messages')
-  async getAdminMessages(
-    @Req() req: any,
-    @Param('id') id: string,
-    @Query('page') page: string = '1',
-    @Query('limit') limit: string = '100',
-  ) {
-    this.checkAdmin(req);
-    return this.supportService.getMessagesForAdmin(
-      id,
-      parseInt(page, 10),
-      parseInt(limit, 10),
-    );
+  @Roles(...ADMIN_ROLES)
+  async getAdminMessages(@Param('id', new ParseUUIDPipe()) id: string, @Query('limit') limit?: string) {
+    return this.supportService.getMessagesForAdmin(id, clampInt(limit, 100, 1, 200));
   }
 
   @Post('admin/support/conversations/:id/messages')
-  async sendAdminMessage(
-    @Req() req: any,
-    @Param('id') id: string,
-    @Body('content') content: string,
-  ) {
-    this.checkAdmin(req);
-    if (!content?.trim()) {
-      throw new BadRequestException('Message content is required');
-    }
-    return this.supportService.sendMessageAsAdmin(id, req.user.id, content.trim());
+  @Roles(...ADMIN_ROLES)
+  async sendAdminMessage(@Req() req: any, @Param('id', new ParseUUIDPipe()) id: string, @Body() dto: MessageDto) {
+    return this.supportService.sendMessageAsAdmin(id, req.user.id, dto.content);
   }
 
   @Patch('admin/support/conversations/:id/close')
-  async closeConversation(@Req() req: any, @Param('id') id: string) {
-    this.checkAdmin(req);
+  @Roles(...ADMIN_ROLES)
+  async closeConversation(@Param('id', new ParseUUIDPipe()) id: string) {
     return this.supportService.closeConversation(id);
   }
 }

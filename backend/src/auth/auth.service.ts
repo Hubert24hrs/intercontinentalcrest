@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException, NotFoundException, HttpException, HttpStatus } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from '../users/users.service';
 import { RegisterDto } from './dto/register.dto';
@@ -7,6 +7,16 @@ import * as bcrypt from 'bcrypt';
 import { authenticator } from 'otplib';
 import * as qrcode from 'qrcode';
 import { EmailService } from '../notifications/email.service';
+import {
+  ACCESS_TOKEN_TTL,
+  REFRESH_TOKEN_TTL,
+  TWO_FA_TOKEN_TTL,
+  getAccessSecret,
+  getRefreshSecret,
+} from './jwt.config';
+
+const MAX_FAILED_LOGINS = 5;
+const LOCKOUT_MINUTES = 15;
 
 @Injectable()
 export class AuthService {
@@ -17,13 +27,12 @@ export class AuthService {
   ) {}
 
   async register(registerDto: RegisterDto) {
-    const salt = await bcrypt.genSalt(12);
-    const passwordHash = await bcrypt.hash(registerDto.password, salt);
+    const passwordHash = await bcrypt.hash(registerDto.password, 12);
 
     const user = await this.usersService.create({
-      fullName: registerDto.fullName,
+      fullName: registerDto.fullName.trim(),
       email: registerDto.email.trim().toLowerCase(),
-      phone: registerDto.phone,
+      phone: registerDto.phone?.trim() || undefined,
       passwordHash,
     });
 
@@ -31,7 +40,7 @@ export class AuthService {
       const { text, html } = this.emailService.getWelcomeEmailTemplate(user.fullName);
       await this.emailService.sendEmail({
         to: user.email,
-        subject: 'Welcome to Intercontinental Crest — Account Opened Successfully!',
+        subject: 'Welcome to Intercontinental Crest. Your demo account is ready',
         text,
         html,
       });
@@ -48,36 +57,39 @@ export class AuthService {
   }
 
   async validateUser(loginDto: LoginDto) {
-    // Normalise the submitted email — strip surrounding whitespace and lowercase
-    // so the lookup is consistent regardless of what the client sends.
     const normalizedEmail = loginDto.email.trim().toLowerCase();
-
     const user = await this.usersService.findOneByEmail(normalizedEmail);
-    if (!user) {
-      console.warn(`[Auth] Login failed — user not found: ${normalizedEmail}`);
-      throw new UnauthorizedException('Invalid email or password');
-    }
 
-    if (user.status !== 'active') {
-      console.warn(`[Auth] Login blocked — account status=${user.status} for: ${normalizedEmail}`);
-      throw new UnauthorizedException('Your account is not active. Please contact support.');
+    // Same message for unknown email and wrong password (no account enumeration).
+    if (!user) throw new UnauthorizedException('Invalid email or password');
+
+    if (user.lockedUntil && user.lockedUntil > new Date()) {
+      const minutes = Math.max(1, Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60000));
+      throw new HttpException(
+        `Too many failed sign in attempts. Try again in ${minutes} minute${minutes === 1 ? '' : 's'} or reset your password.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
     }
 
     const matches = await bcrypt.compare(loginDto.password, user.passwordHash);
     if (!matches) {
-      console.warn(`[Auth] Login failed — password mismatch for: ${normalizedEmail} (role=${user.role})`);
+      await this.usersService.registerFailedLogin(user.id, MAX_FAILED_LOGINS, LOCKOUT_MINUTES);
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    console.log(`[Auth] Login successful for: ${normalizedEmail} (role=${user.role})`);
+    if (user.status !== 'active') {
+      throw new UnauthorizedException('Your account is not active. Please contact support.');
+    }
+
+    await this.usersService.registerSuccessfulLogin(user.id);
     return user;
   }
 
   async login(user: any) {
     if (user.twoFactorEnabled) {
       const tempToken = this.jwtService.sign(
-        { sub: user.id, isTemp2fa: true },
-        { expiresIn: '5m' },
+        { sub: user.id, typ: '2fa' },
+        { expiresIn: TWO_FA_TOKEN_TTL, secret: getAccessSecret() },
       );
       return { require2Fa: true, tempToken };
     }
@@ -85,43 +97,49 @@ export class AuthService {
   }
 
   async generateTokens(user: any) {
-    const payload = { sub: user.id, email: user.email, role: user.role, fullName: user.fullName };
-
-    const accessToken = this.jwtService.sign(payload, { expiresIn: '8h' });
-    const refreshToken = this.jwtService.sign(payload, { expiresIn: '30d' });
+    const accessToken = this.jwtService.sign(
+      { sub: user.id, email: user.email, role: user.role, fullName: user.fullName, typ: 'access' },
+      { expiresIn: ACCESS_TOKEN_TTL, secret: getAccessSecret() },
+    );
+    const refreshToken = this.jwtService.sign(
+      { sub: user.id, typ: 'refresh' },
+      { expiresIn: REFRESH_TOKEN_TTL, secret: getRefreshSecret() },
+    );
 
     return {
       accessToken,
       refreshToken,
-      user: {
-        id: user.id,
-        fullName: user.fullName,
-        email: user.email,
-        role: user.role,
-        phone: user.phone,
-        twoFactorEnabled: user.twoFactorEnabled,
-      },
+      user: this.toPublicUser(user),
+    };
+  }
+
+  toPublicUser(user: any) {
+    return {
+      id: user.id,
+      fullName: user.fullName,
+      email: user.email,
+      role: user.role,
+      phone: user.phone ?? null,
+      twoFactorEnabled: !!user.twoFactorEnabled,
+      createdAt: user.createdAt,
     };
   }
 
   async refreshAccessToken(refreshToken: string) {
     let payload: any;
     try {
-      payload = this.jwtService.verify(refreshToken);
+      payload = this.jwtService.verify(refreshToken, { secret: getRefreshSecret() });
     } catch {
-      throw new UnauthorizedException('Refresh token is invalid or expired');
+      throw new UnauthorizedException('Session expired. Please sign in again.');
+    }
+    if (!payload?.sub || payload.typ !== 'refresh') {
+      throw new UnauthorizedException('Session expired. Please sign in again.');
     }
 
-    if (!payload?.sub) throw new UnauthorizedException('Refresh token is invalid or expired');
-
-    // Always look up the user from the database to ensure the session is still valid.
-    // This correctly rejects tokens for deleted or suspended users.
     const user = await this.usersService.findOneById(payload.sub);
-    if (!user) {
-      console.warn(`[Auth] Token refresh rejected — user not found: ${payload.sub}`);
-      throw new UnauthorizedException('Session expired. Please log in again.');
+    if (!user || user.status !== 'active') {
+      throw new UnauthorizedException('Session expired. Please sign in again.');
     }
-
     return this.generateTokens(user);
   }
 
@@ -132,6 +150,7 @@ export class AuthService {
   async generate2FaSecret(userId: string) {
     const user = await this.usersService.findOneById(userId);
     if (!user) throw new NotFoundException('User not found');
+    if (user.twoFactorEnabled) throw new BadRequestException('Two factor authentication is already turned on');
 
     const secret = authenticator.generateSecret();
     const otpauthUrl = authenticator.keyuri(user.email, 'Intercontinental Crest', secret);
@@ -144,57 +163,57 @@ export class AuthService {
   async verify2FaSetup(userId: string, code: string) {
     const user = await this.usersService.findOneById(userId);
     if (!user || !user.twoFactorSecret) {
-      throw new BadRequestException('2FA Setup not initiated or secret not found');
+      throw new BadRequestException('Start two factor setup first');
     }
 
     const isVerified = authenticator.verify({ token: code, secret: user.twoFactorSecret });
-    if (!isVerified) throw new UnauthorizedException('Invalid 2FA code');
+    if (!isVerified) throw new BadRequestException('That code is not valid. Check your authenticator app and try again.');
 
     await this.usersService.enable2Fa(userId);
     return { success: true };
   }
 
   async authenticate2Fa(tempToken: string, code: string) {
+    let payload: any;
     try {
-      const payload = this.jwtService.verify(tempToken);
-      if (!payload.isTemp2fa) throw new UnauthorizedException('Invalid temporary token');
-
-      const user = await this.usersService.findOneById(payload.sub);
-      if (!user || !user.twoFactorSecret) {
-        throw new UnauthorizedException('User or 2FA configuration not found');
-      }
-
-      const isVerified = authenticator.verify({ token: code, secret: user.twoFactorSecret });
-      if (!isVerified) throw new UnauthorizedException('Invalid 2FA code');
-
-      return this.generateTokens(user);
-    } catch (e) {
-      throw new UnauthorizedException('Invalid or expired 2FA verification session');
+      payload = this.jwtService.verify(tempToken, { secret: getAccessSecret() });
+    } catch {
+      throw new UnauthorizedException('Your verification session expired. Please sign in again.');
     }
+    if (!payload?.sub || payload.typ !== '2fa') {
+      throw new UnauthorizedException('Your verification session expired. Please sign in again.');
+    }
+
+    const user = await this.usersService.findOneById(payload.sub);
+    if (!user || !user.twoFactorSecret || user.status !== 'active') {
+      throw new UnauthorizedException('Your verification session expired. Please sign in again.');
+    }
+
+    const isVerified = authenticator.verify({ token: String(code || ''), secret: user.twoFactorSecret });
+    if (!isVerified) throw new UnauthorizedException('Invalid authentication code');
+
+    return this.generateTokens(user);
   }
 
   async disable2Fa(userId: string, code: string) {
     const user = await this.usersService.findOneById(userId);
     if (!user || !user.twoFactorSecret) {
-      throw new BadRequestException('2FA configuration not found');
+      throw new BadRequestException('Two factor authentication is not turned on');
     }
 
     const isVerified = authenticator.verify({ token: code, secret: user.twoFactorSecret });
-    if (!isVerified) throw new UnauthorizedException('Invalid 2FA code');
+    if (!isVerified) throw new BadRequestException('Invalid authentication code');
 
     await this.usersService.disable2Fa(userId);
     return { success: true };
   }
 
   async updateProfile(userId: string, data: { fullName?: string; phone?: string }) {
-    const user = await this.usersService.updateProfile(userId, data);
-    return {
-      id: user.id,
-      fullName: user.fullName,
-      email: user.email,
-      phone: user.phone,
-      role: user.role,
-    };
+    const user = await this.usersService.updateProfile(userId, {
+      fullName: data.fullName?.trim() || undefined,
+      phone: data.phone === undefined ? undefined : data.phone.trim() || null,
+    });
+    return this.toPublicUser(user);
   }
 
   async changePassword(userId: string, currentPassword: string, newPassword: string) {
@@ -203,36 +222,20 @@ export class AuthService {
   }
 
   async forgotPassword(email: string) {
-    const result = await this.usersService.createPasswordResetToken(email);
+    const normalizedEmail = email.trim().toLowerCase();
+    const result = await this.usersService.createPasswordResetToken(normalizedEmail);
     // Always return success to prevent email enumeration
     if (!result) return { success: true };
 
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const frontendUrl = (process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/$/, '');
     const resetLink = `${frontendUrl}/reset-password?token=${result.token}`;
 
     try {
       await this.emailService.sendEmail({
-        to: email,
-        subject: 'Intercontinental Crest — Password Reset Request',
-        text: `You requested a password reset. Click the link below to reset your password:\n\n${resetLink}\n\nThis link expires in 1 hour. If you did not request this, please ignore this email.`,
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <div style="background: #0A2342; padding: 20px; border-radius: 12px 12px 0 0; text-align: center;">
-              <h1 style="color: #00B7F1; margin: 0; font-size: 22px;">INTERCONTINENTAL CREST</h1>
-            </div>
-            <div style="background: #fff; padding: 30px; border: 1px solid #e5e7eb; border-radius: 0 0 12px 12px;">
-              <h2 style="color: #0A2342;">Password Reset Request</h2>
-              <p style="color: #6b7280;">Hi ${result.user.fullName},</p>
-              <p style="color: #6b7280;">We received a request to reset your password. Click the button below to set a new password:</p>
-              <div style="text-align: center; margin: 30px 0;">
-                <a href="${resetLink}" style="background: linear-gradient(135deg, #00B7F1, #0078B3); color: white; padding: 14px 28px; border-radius: 50px; text-decoration: none; font-weight: 600; display: inline-block;">Reset My Password</a>
-              </div>
-              <p style="color: #9ca3af; font-size: 13px;">This link expires in <strong>1 hour</strong>. If you did not request a password reset, please ignore this email — your account is safe.</p>
-              <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;">
-              <p style="color: #9ca3af; font-size: 12px; text-align: center;">Intercontinental Crest — Secure Global Banking</p>
-            </div>
-          </div>
-        `,
+        to: normalizedEmail,
+        subject: 'Reset your Intercontinental Crest password',
+        text: `You requested a password reset. Use the link below to choose a new password:\n\n${resetLink}\n\nThis link expires in 1 hour. If you did not request this, you can ignore this email.`,
+        html: this.emailService.getPasswordResetEmailTemplate(result.user.fullName, resetLink),
       });
     } catch (err) {
       console.error('Failed to send password reset email:', err);

@@ -2,6 +2,25 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 
+/** Escape user-controlled values before they are placed in email HTML. */
+export function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function frontendUrl(): string {
+  return (process.env.FRONTEND_URL || 'http://localhost:3000').trim().replace(/\/$/, '');
+}
+
+export interface EmailRow {
+  label: string;
+  value: string;
+}
+
 @Injectable()
 export class EmailService implements OnModuleInit {
   private logFilePath: string;
@@ -9,65 +28,37 @@ export class EmailService implements OnModuleInit {
   onModuleInit() {
     const basePath = process.env.VERCEL ? '/tmp' : process.cwd();
     this.logFilePath = path.join(basePath, 'mails', 'sent_mails.log');
-    
-    // Ensure mails directory exists
+
     const mailsDir = path.dirname(this.logFilePath);
     if (!fs.existsSync(mailsDir)) {
       fs.mkdirSync(mailsDir, { recursive: true });
     }
 
-    const apiKey = process.env.RESEND_API_KEY;
-    if (apiKey) {
-      console.log('EmailService: Resend API initialized successfully.');
+    if (process.env.RESEND_API_KEY) {
+      console.log('EmailService: Resend API initialized.');
     } else {
-      console.log(
-        `EmailService: Resend API key not specified. Falling back to local file logging: ${this.logFilePath}`,
-      );
+      console.log(`EmailService: RESEND_API_KEY not set, so emails are written to ${this.logFilePath}`);
     }
   }
 
-  async sendEmail(options: {
-    to: string;
-    subject: string;
-    text: string;
-    html?: string;
-  }) {
-    const apiKey = process.env.RESEND_API_KEY;
-    const from =
-      process.env.RESEND_FROM_EMAIL ||
-      '"Intercontinental Crest" <onboarding@resend.dev>';
+  async sendEmail(options: { to: string; subject: string; text: string; html?: string }) {
+    const apiKey = process.env.RESEND_API_KEY?.trim();
+    const from = process.env.RESEND_FROM_EMAIL?.trim() || '"Intercontinental Crest" <onboarding@resend.dev>';
 
     if (apiKey) {
       try {
-        console.log(`EmailService: Sending email to ${options.to} via Resend...`);
         const response = await fetch('https://api.resend.com/emails', {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${apiKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            from,
-            to: options.to,
-            subject: options.subject,
-            text: options.text,
-            html: options.html,
-          }),
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from, to: options.to, subject: options.subject, text: options.text, html: options.html }),
         });
-
-        const resData = await response.json().catch(() => ({}));
-        if (response.ok) {
-          console.log(`Email sent successfully via Resend to ${options.to}. ID: ${resData.id}`);
-          return;
-        } else {
-          console.error('Resend API returned an error:', resData);
-        }
+        if (response.ok) return;
+        console.error('Resend API returned an error:', await response.json().catch(() => ({})));
       } catch (err) {
         console.error('Resend email send failed. Logging email locally instead.', err);
       }
     }
 
-    // Fallback: Write email to local file
     const logEntry = `
 ========================================================================
 TIMESTAMP: ${new Date().toISOString()}
@@ -83,138 +74,103 @@ ${options.html || 'N/A'}
 ========================================================================
 \n`;
 
-    fs.appendFileSync(this.logFilePath, logEntry, 'utf8');
-    console.log(`[SIMULATED EMAIL SENT TO ${options.to}] Subject: ${options.subject}`);
+    try {
+      fs.appendFileSync(this.logFilePath, logEntry, 'utf8');
+    } catch (err) {
+      console.error('Could not write email log:', err);
+    }
+  }
+
+  /**
+   * Shared branded layout. `bodyHtml` must already be escaped / trusted markup;
+   * every interpolated user value in the helpers below goes through escapeHtml().
+   */
+  renderLayout(opts: { heading: string; bodyHtml: string; cta?: { label: string; href: string }; accent?: string }): string {
+    const accent = opts.accent || '#0E7C86';
+    const cta = opts.cta
+      ? `<div style="text-align:center;margin:28px 0 8px"><a href="${escapeHtml(opts.cta.href)}" style="background:${accent};color:#ffffff;padding:12px 26px;border-radius:999px;text-decoration:none;font-weight:600;display:inline-block">${escapeHtml(opts.cta.label)}</a></div>`
+      : '';
+    return `<!DOCTYPE html>
+<html><body style="margin:0;padding:0;background:#f4f6f8;font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a">
+  <div style="max-width:600px;margin:28px auto;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0">
+    <div style="background:#0B1F33;padding:24px 28px;border-bottom:3px solid ${accent}">
+      <div style="color:#ffffff;font-size:18px;font-weight:700;letter-spacing:0.4px">Intercontinental Crest</div>
+      <div style="color:#94a3b8;font-size:12px;margin-top:2px">Digital banking demo platform</div>
+    </div>
+    <div style="padding:32px 28px;line-height:1.65;font-size:14px">
+      <h2 style="margin:0 0 14px;font-size:19px;color:#0B1F33">${escapeHtml(opts.heading)}</h2>
+      ${opts.bodyHtml}
+      ${cta}
+    </div>
+    <div style="background:#f8fafc;padding:16px 28px;text-align:center;font-size:11px;color:#64748b;border-top:1px solid #e2e8f0">
+      Intercontinental Crest is a demonstration platform. Balances and transactions are simulated and are not FDIC insured.<br/>
+      This is an automated message. Please do not reply.
+    </div>
+  </div>
+</body></html>`;
+  }
+
+  renderRows(rows: EmailRow[]): string {
+    const cells = rows
+      .map(
+        (r) =>
+          `<tr><td style="padding:8px 0;color:#64748b;border-bottom:1px solid #f1f5f9">${escapeHtml(r.label)}</td><td style="padding:8px 0;text-align:right;font-weight:600;border-bottom:1px solid #f1f5f9">${escapeHtml(r.value)}</td></tr>`,
+      )
+      .join('');
+    return `<table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:13px">${cells}</table>`;
   }
 
   getWelcomeEmailTemplate(fullName: string): { text: string; html: string } {
     const text = `Hello ${fullName},
 
-Welcome to Intercontinental Crest. We are delighted to inform you that your digital banking account has been successfully opened!
+Welcome to Intercontinental Crest. Your demo account is ready: a checking account, a savings account and simulated crypto wallets have been created for you.
 
-Your default checking and savings accounts are now provisioned and active, alongside your multi-currency crypto wallets.
+Sign in: ${frontendUrl()}/login
 
-Thank you for choosing Intercontinental Crest.
+Intercontinental Crest is a demonstration platform. Balances and transactions are simulated.`;
 
-Best regards,
-The Intercontinental Crest Team`;
-
-    const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <style>
-    body { font-family: 'Outfit', 'Inter', sans-serif; background-color: #f9fafb; margin: 0; padding: 0; color: #1f2937; }
-    .container { max-width: 600px; margin: 30px auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; }
-    .header { background-color: #0A2342; padding: 30px; text-align: center; border-bottom: 4px solid #00B7F1; }
-    .header h1 { color: #ffffff; margin: 0; font-size: 24px; font-weight: bold; letter-spacing: 1px; }
-    .header p { color: #00B7F1; margin: 5px 0 0 0; font-size: 12px; font-weight: bold; letter-spacing: 3px; }
-    .content { padding: 40px 30px; line-height: 1.6; }
-    .content h2 { color: #0A2342; font-size: 20px; margin-top: 0; }
-    .highlight { background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 15px; border-radius: 8px; margin: 20px 0; }
-    .button-container { text-align: center; margin: 30px 0; }
-    .button { background-color: #00B7F1; color: #ffffff; padding: 12px 30px; text-decoration: none; border-radius: 30px; font-weight: bold; display: inline-block; box-shadow: 0 4px 10px rgba(0, 183, 241, 0.2); }
-    .footer { background-color: #f3f4f6; padding: 20px; text-align: center; font-size: 11px; color: #6b7280; border-top: 1px solid #e5e7eb; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>INTERCONTINENTAL</h1>
-      <p>CREST</p>
-    </div>
-    <div class="content">
-      <h2>Welcome to Global Banking, ${fullName}!</h2>
-      <p>We are delighted to inform you that your secure digital banking account has been successfully opened and verified.</p>
-      
-      <div class="highlight">
-        <strong>Default accounts provisioned:</strong><br/>
-        • Checking Account (USD) - Active<br/>
-        • Savings Account (USD) - Active<br/>
-        • Multi-Asset Crypto Wallets - Activated
-      </div>
-      
-      <p>You can now manage your assets, initiate international transfers, and invest seamlessly from your premium customer dashboard.</p>
-      
-      <div class="button-container">
-        <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/login" class="button" style="color: #ffffff;">Access Your Dashboard</a>
-      </div>
-    </div>
-    <div class="footer">
-      <p>© 2026 Intercontinental Crest. FDIC Insured Simulation. All rights reserved.</p>
-      <p>This is a secure automated notification. Please do not reply directly to this email.</p>
-    </div>
-  </div>
-</body>
-</html>`;
+    const html = this.renderLayout({
+      heading: `Welcome, ${fullName}`,
+      bodyHtml: `<p>Your demo account is ready. We've set up:</p>
+        <ul style="padding-left:18px;color:#334155">
+          <li>A checking account (USD)</li>
+          <li>A savings account (USD)</li>
+          <li>Simulated crypto wallets</li>
+        </ul>
+        <p>Everything on the platform is simulated, so you can explore transfers, payments, investing and lending without real money.</p>`,
+      cta: { label: 'Sign in to your dashboard', href: `${frontendUrl()}/login` },
+    });
 
     return { text, html };
   }
 
-  getTransactionEmailTemplate(
-    fullName: string,
-    title: string,
-    message: string,
-  ): { text: string; html: string } {
+  getTransactionEmailTemplate(fullName: string, title: string, message: string): { text: string; html: string } {
     const text = `Hello ${fullName},
 
-Notification: ${title}
+${title}
 
 ${message}
 
-Thank you for choosing Intercontinental Crest.
+If you don't recognise this activity, contact support from your dashboard.`;
 
-Best regards,
-The Intercontinental Crest Team`;
-
-    const html = `
-<!DOCTYPE html>
-<html>
-<head>
-  <style>
-    body { font-family: 'Outfit', 'Inter', sans-serif; background-color: #f9fafb; margin: 0; padding: 0; color: #1f2937; }
-    .container { max-width: 600px; margin: 30px auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05); border: 1px solid #e5e7eb; }
-    .header { background-color: #0A2342; padding: 30px; text-align: center; border-bottom: 4px solid #00B7F1; }
-    .header h1 { color: #ffffff; margin: 0; font-size: 24px; font-weight: bold; letter-spacing: 1px; }
-    .header p { color: #00B7F1; margin: 5px 0 0 0; font-size: 12px; font-weight: bold; letter-spacing: 3px; }
-    .content { padding: 40px 30px; line-height: 1.6; }
-    .content h2 { color: #0A2342; font-size: 18px; margin-top: 0; border-bottom: 1px solid #f3f4f6; padding-bottom: 10px; }
-    .alert-box { background-color: #f0f9ff; border-left: 4px solid #00B7F1; padding: 15px; border-radius: 8px; margin: 20px 0; font-size: 14px; }
-    .button-container { text-align: center; margin: 30px 0; }
-    .button { background-color: #0A2342; color: #ffffff; padding: 12px 30px; text-decoration: none; border-radius: 30px; font-weight: bold; display: inline-block; }
-    .footer { background-color: #f3f4f6; padding: 20px; text-align: center; font-size: 11px; color: #6b7280; border-top: 1px solid #e5e7eb; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <h1>INTERCONTINENTAL</h1>
-      <p>CREST</p>
-    </div>
-    <div class="content">
-      <h2>Account Security & Ledger Update</h2>
-      <p>Hello ${fullName},</p>
-      <p>We are writing to notify you of a new activity on your digital banking ledger:</p>
-      
-      <div class="alert-box">
-        <strong>${title}</strong><br/>
-        <p style="margin: 5px 0 0 0; color: #4b5563;">${message}</p>
-      </div>
-      
-      <p>If you did not authorize or recognize this operation, please contact our support team immediately to freeze your account.</p>
-      
-      <div class="button-container">
-        <a href="${process.env.FRONTEND_URL || 'http://localhost:3000'}/login" class="button" style="color: #ffffff;">Review Ledger Operations</a>
-      </div>
-    </div>
-    <div class="footer">
-      <p>© 2026 Intercontinental Crest. FDIC Insured Simulation. All rights reserved.</p>
-      <p>This is a secure automated notification. Please do not reply directly to this email.</p>
-    </div>
-  </div>
-</body>
-</html>`;
+    const html = this.renderLayout({
+      heading: title,
+      bodyHtml: `<p>Hello ${escapeHtml(fullName)},</p>
+        <div style="background:#f0fdfa;border-left:3px solid #0E7C86;padding:14px 16px;border-radius:8px;color:#334155">${escapeHtml(message)}</div>
+        <p style="color:#64748b;font-size:13px;margin-top:18px">If you don't recognise this activity, contact support from your dashboard.</p>`,
+      cta: { label: 'Review activity', href: `${frontendUrl()}/dashboard/transactions` },
+    });
 
     return { text, html };
+  }
+
+  getPasswordResetEmailTemplate(fullName: string, resetLink: string): string {
+    return this.renderLayout({
+      heading: 'Reset your password',
+      bodyHtml: `<p>Hello ${escapeHtml(fullName)},</p>
+        <p>We received a request to reset the password for your account. Use the button below to choose a new one. The link expires in <strong>1 hour</strong>.</p>
+        <p style="color:#64748b;font-size:13px">If you didn't ask for this, you can ignore this email. Your password won't change.</p>`,
+      cta: { label: 'Choose a new password', href: resetLink },
+    });
   }
 }

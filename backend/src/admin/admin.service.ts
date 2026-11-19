@@ -1,13 +1,31 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Decimal } from '@prisma/client/runtime/library';
 import { AdjustBalanceDto } from './dto/adjust-balance.dto';
+import { maskSsn } from '../loans/loan-products';
+import { creditCoins } from '../crypto/crypto-ledger';
+import { CryptoService } from '../crypto/crypto.service';
+import { newReference } from '../common/pagination';
 
 const MAX_SINGLE_ADJUSTMENT = 500_000;
+const PRIVILEGED_ROLES = ['admin', 'super_admin'];
+
+export interface Actor {
+  id: string;
+  role: string;
+  email: string;
+}
+
+function money(n: number | Decimal): string {
+  return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
 @Injectable()
 export class AdminService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private cryptoService: CryptoService,
+  ) {}
 
   async getDashboardStats() {
     const [
@@ -17,50 +35,38 @@ export class AdminService {
       pendingKyc,
       totalDeposits,
       activeLoans,
+      pendingLoans,
       totalInvestments,
       totalCryptoOrders,
+      openSupport,
     ] = await Promise.all([
       this.prisma.user.count(),
       this.prisma.user.count({ where: { status: 'active' } }),
       this.prisma.user.count({ where: { status: 'suspended' } }),
       this.prisma.kycDocument.count({ where: { status: 'pending' } }),
-      this.prisma.account.aggregate({
-        _sum: { balance: true },
-      }),
-      this.prisma.loan.count({ where: { status: 'approved' } }),
-      this.prisma.investment.aggregate({
-        _sum: { principalAmount: true },
-      }),
+      this.prisma.account.aggregate({ _sum: { balance: true } }),
+      this.prisma.loan.count({ where: { status: { in: ['approved', 'active'] } } }),
+      this.prisma.loan.count({ where: { status: 'pending' } }),
+      this.prisma.investment.aggregate({ _sum: { principalAmount: true }, where: { status: { not: 'closed' } } }),
       this.prisma.cryptoOrder.count(),
+      this.prisma.supportConversation.count({ where: { status: 'open' } }),
     ]);
 
-    // Let's get recent registrations (last 5)
-    const recentUsers = await this.prisma.user.findMany({
-      take: 5,
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        fullName: true,
-        email: true,
-        role: true,
-        status: true,
-        createdAt: true,
-      },
-    });
-
-    // Let's get recent transactions (last 5)
-    const recentTransactions = await this.prisma.transaction.findMany({
-      take: 5,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        senderAccount: {
-          include: { user: { select: { fullName: true } } },
+    const [recentUsers, recentTransactions] = await Promise.all([
+      this.prisma.user.findMany({
+        take: 6,
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, fullName: true, email: true, role: true, status: true, createdAt: true },
+      }),
+      this.prisma.transaction.findMany({
+        take: 8,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          senderAccount: { include: { user: { select: { fullName: true } } } },
+          receiverAccount: { include: { user: { select: { fullName: true } } } },
         },
-        receiverAccount: {
-          include: { user: { select: { fullName: true } } },
-        },
-      },
-    });
+      }),
+    ]);
 
     return {
       stats: {
@@ -70,31 +76,28 @@ export class AdminService {
         pendingKyc,
         totalDeposits: totalDeposits._sum.balance || 0,
         activeLoans,
+        pendingLoans,
         totalInvestments: totalInvestments._sum.principalAmount || 0,
         totalCryptoOrders,
+        openSupport,
       },
       recentUsers,
       recentTransactions,
     };
   }
 
-  async getAllUsers(
-    page: number = 1,
-    limit: number = 20,
-    search?: string,
-    role?: string,
-    status?: string,
-  ) {
+  async getAllUsers(page = 1, limit = 20, search?: string, role?: string, status?: string) {
     const skip = (page - 1) * limit;
     const whereClause: any = {};
-
     if (role) whereClause.role = role;
     if (status) whereClause.status = status;
-    if (search) {
+    if (search?.trim()) {
+      const q = search.trim();
       whereClause.OR = [
-        { fullName: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search, mode: 'insensitive' } },
+        { fullName: { contains: q, mode: 'insensitive' } },
+        { email: { contains: q, mode: 'insensitive' } },
+        { phone: { contains: q, mode: 'insensitive' } },
+        { accounts: { some: { accountNumber: { contains: q, mode: 'insensitive' } } } },
       ];
     }
 
@@ -111,22 +114,15 @@ export class AdminService {
           role: true,
           status: true,
           createdAt: true,
-          _count: {
-            select: { accounts: true, loans: true, investments: true },
-          },
+          lastLogin: true,
+          _count: { select: { accounts: true, loans: true, investments: true } },
         },
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.user.count({ where: whereClause }),
     ]);
 
-    return {
-      users,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+    return { users, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async getUserDetail(userId: string) {
@@ -134,6 +130,7 @@ export class AdminService {
       where: { id: userId },
       include: {
         accounts: {
+          orderBy: { createdAt: 'asc' },
           include: {
             sentTransfers: { take: 5, orderBy: { createdAt: 'desc' } },
             receivedTransfers: { take: 5, orderBy: { createdAt: 'desc' } },
@@ -146,28 +143,38 @@ export class AdminService {
         cryptoOrders: { take: 10, orderBy: { createdAt: 'desc' } },
       },
     });
-
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    // Hide password hash
-    const { passwordHash, ...userWithoutPassword } = user;
-    return userWithoutPassword;
-  }
-
-  async updateUserStatus(userId: string, status: string, adminId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
-    const updated = await this.prisma.user.update({
-      where: { id: userId },
-      data: { status },
-    });
+    // Never expose credentials or second-factor secrets, even to administrators.
+    const { passwordHash, twoFactorSecret, passwordResetToken, passwordResetExpiry, ...safe } = user;
+    return { ...safe, loans: safe.loans.map((l) => ({ ...l, ssn: maskSsn(l.ssn) })) };
+  }
 
+  private async loadTarget(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
+
+  /** Admins manage customers; only a super admin may act on other administrators. */
+  private assertCanManage(actor: Actor, target: { id: string; role: string }) {
+    if (actor.id === target.id) throw new BadRequestException('You cannot change your own account here');
+    if (PRIVILEGED_ROLES.includes(target.role) && actor.role !== 'super_admin') {
+      throw new ForbiddenException('Only a super admin can manage administrator accounts');
+    }
+    if (target.role === 'super_admin') {
+      throw new ForbiddenException('Super admin accounts cannot be modified from the admin console');
+    }
+  }
+
+  async updateUserStatus(userId: string, status: string, actor: Actor) {
+    const user = await this.loadTarget(userId);
+    this.assertCanManage(actor, user);
+
+    const updated = await this.prisma.user.update({ where: { id: userId }, data: { status } });
     await this.prisma.auditLog.create({
       data: {
-        userId: adminId,
+        userId: actor.id,
         action: 'UPDATE_USER_STATUS',
         entityType: 'User',
         entityId: userId,
@@ -175,22 +182,19 @@ export class AdminService {
         newValues: JSON.stringify({ status }),
       },
     });
-
-    return { message: 'User status updated successfully', user: { id: updated.id, status: updated.status } };
+    return { message: 'User status updated', user: { id: updated.id, status: updated.status } };
   }
 
-  async updateUserRole(userId: string, role: string, adminId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new NotFoundException('User not found');
+  async updateUserRole(userId: string, role: string, actor: Actor) {
+    if (actor.role !== 'super_admin') throw new ForbiddenException('Only a super admin can change roles');
+    const user = await this.loadTarget(userId);
+    this.assertCanManage(actor, user);
+    if (role === 'super_admin') throw new ForbiddenException('The super admin role cannot be granted from the console');
 
-    const updated = await this.prisma.user.update({
-      where: { id: userId },
-      data: { role },
-    });
-
+    const updated = await this.prisma.user.update({ where: { id: userId }, data: { role } });
     await this.prisma.auditLog.create({
       data: {
-        userId: adminId,
+        userId: actor.id,
         action: 'UPDATE_USER_ROLE',
         entityType: 'User',
         entityId: userId,
@@ -198,22 +202,20 @@ export class AdminService {
         newValues: JSON.stringify({ role }),
       },
     });
-
-    return { message: 'User role updated successfully', user: { id: updated.id, role: updated.role } };
+    return { message: 'User role updated', user: { id: updated.id, role: updated.role } };
   }
 
-  async toggleAccountFreeze(accountId: string, isFrozen: boolean, adminId: string) {
-    const account = await this.prisma.account.findUnique({ where: { id: accountId } });
+  async toggleAccountFreeze(accountId: string, isFrozen: boolean, actor: Actor) {
+    const account = await this.prisma.account.findUnique({ where: { id: accountId }, include: { user: true } });
     if (!account) throw new NotFoundException('Account not found');
+    if (account.userId !== actor.id && PRIVILEGED_ROLES.includes(account.user.role) && actor.role !== 'super_admin') {
+      throw new ForbiddenException('Only a super admin can freeze administrator accounts');
+    }
 
-    const updated = await this.prisma.account.update({
-      where: { id: accountId },
-      data: { isFrozen },
-    });
-
+    const updated = await this.prisma.account.update({ where: { id: accountId }, data: { isFrozen } });
     await this.prisma.auditLog.create({
       data: {
-        userId: adminId,
+        userId: actor.id,
         action: isFrozen ? 'FREEZE_ACCOUNT' : 'UNFREEZE_ACCOUNT',
         entityType: 'Account',
         entityId: accountId,
@@ -222,13 +224,36 @@ export class AdminService {
       },
     });
 
-    return { message: `Account ${isFrozen ? 'frozen' : 'unfrozen'} successfully`, account: { id: updated.id, isFrozen: updated.isFrozen } };
+    await this.prisma.notification.create({
+      data: {
+        userId: account.userId,
+        title: isFrozen ? 'Account frozen' : 'Account unfrozen',
+        message: isFrozen
+          ? `Account ${account.accountNumber} has been frozen. Contact support for details.`
+          : `Account ${account.accountNumber} is active again.`,
+        type: isFrozen ? 'warning' : 'success',
+      },
+    });
+
+    return {
+      message: `Account ${isFrozen ? 'frozen' : 'unfrozen'}`,
+      account: { id: updated.id, isFrozen: updated.isFrozen },
+    };
   }
 
-  async getAllTransactions(page: number = 1, limit: number = 20, status?: string) {
+  async getAllTransactions(page = 1, limit = 20, status?: string, search?: string) {
     const skip = (page - 1) * limit;
     const whereClause: any = {};
     if (status) whereClause.status = status;
+    if (search?.trim()) {
+      const q = search.trim();
+      whereClause.OR = [
+        { transactionReference: { contains: q, mode: 'insensitive' } },
+        { description: { contains: q, mode: 'insensitive' } },
+        { senderAccount: { accountNumber: { contains: q, mode: 'insensitive' } } },
+        { receiverAccount: { accountNumber: { contains: q, mode: 'insensitive' } } },
+      ];
+    }
 
     const [transactions, total] = await Promise.all([
       this.prisma.transaction.findMany({
@@ -236,172 +261,95 @@ export class AdminService {
         skip,
         take: limit,
         include: {
-          senderAccount: {
-            include: { user: { select: { fullName: true, email: true } } },
-          },
-          receiverAccount: {
-            include: { user: { select: { fullName: true, email: true } } },
-          },
+          senderAccount: { include: { user: { select: { fullName: true, email: true } } } },
+          receiverAccount: { include: { user: { select: { fullName: true, email: true } } } },
+          performedByAdmin: { select: { fullName: true, email: true } },
         },
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.transaction.count({ where: whereClause }),
     ]);
 
-    return {
-      transactions,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
-  }
-
-  async creditBankAccount(
-    accountId: string,
-    amount: number,
-    description: string,
-    adminId: string,
-  ) {
-    if (amount <= 0) throw new BadRequestException('Amount must be greater than 0');
-
-    const account = await this.prisma.account.findUnique({
-      where: { id: accountId },
-    });
-    if (!account) throw new NotFoundException('Account not found');
-
-    const decimal = new Decimal(amount);
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.account.update({
-        where: { id: accountId },
-        data: {
-          balance: { increment: decimal },
-          availableBalance: { increment: decimal },
-        },
-      });
-
-      await tx.transaction.create({
-        data: {
-          transactionReference:
-            'ADMIN-CR-' + Date.now() + '-' + Math.floor(Math.random() * 10000),
-          receiverAccountId: accountId,
-          amount: decimal,
-          fee: new Decimal(0),
-          currency: 'USD',
-          status: 'completed',
-          type: 'credit',
-          description: description || 'Admin Credit',
-        },
-      });
-    });
-
-    await this.prisma.auditLog.create({
-      data: {
-        userId: adminId,
-        action: 'ADMIN_CREDIT_ACCOUNT',
-        entityType: 'Account',
-        entityId: accountId,
-        newValues: JSON.stringify({ amount, description }),
-      },
-    });
-
-    await this.prisma.notification.create({
-      data: {
-        userId: account.userId,
-        title: 'Funds Credited to Your Account',
-        message: `$${Number(decimal).toLocaleString('en-US', { minimumFractionDigits: 2 })} has been credited to your account (${account.accountNumber}). ${description ? `Note: ${description}` : ''}`.trim(),
-        type: 'success',
-      },
-    });
-
-    return { message: 'Account credited successfully', amount, accountId };
+    return { transactions, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async creditCrypto(
     userId: string,
-    dto: { coinId: string; coinSymbol: string; coinName: string; quantity: number },
-    adminId: string,
+    dto: { coinId: string; quantity: number; reason?: string },
+    actor: Actor,
   ) {
-    if (dto.quantity <= 0) throw new BadRequestException('Quantity must be greater than 0');
+    const user = await this.loadTarget(userId);
+    const markets = await this.cryptoService.getLiveMarkets();
+    const coin = markets.find((c) => c.id === dto.coinId);
+    if (!coin) throw new BadRequestException('Unknown asset');
 
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new NotFoundException('User not found');
+    const ref = { coinId: coin.id, coinSymbol: coin.symbol.toUpperCase(), coinName: coin.name };
+    const quantity = new Decimal(dto.quantity.toFixed(8));
+    const price = coin.current_price || 0;
 
-    const qtyDecimal = new Decimal(dto.quantity);
-
-    const existing = await this.prisma.cryptoHolding.findUnique({
-      where: { userId_coinId: { userId, coinId: dto.coinId } },
-    });
-
-    if (existing) {
-      await this.prisma.cryptoHolding.update({
-        where: { userId_coinId: { userId, coinId: dto.coinId } },
-        data: { quantity: { increment: qtyDecimal } },
-      });
-    } else {
-      await this.prisma.cryptoHolding.create({
+    await this.prisma.$transaction(async (tx) => {
+      await creditCoins(tx, user.id, ref, quantity, price);
+      await tx.cryptoOrder.create({
         data: {
-          userId,
-          coinId: dto.coinId,
-          coinSymbol: dto.coinSymbol.toUpperCase(),
-          coinName: dto.coinName,
-          quantity: qtyDecimal,
-          avgBuyPrice: new Decimal(0),
+          userId: user.id,
+          ...ref,
+          type: 'deposit',
+          quantity,
+          priceAtTime: new Decimal(price.toFixed(8)),
+          totalUsd: quantity.times(price).toDecimalPlaces(2),
+          fee: new Decimal(0),
+          status: 'completed',
         },
       });
-    }
+    });
 
     await this.prisma.auditLog.create({
       data: {
-        userId: adminId,
+        userId: actor.id,
         action: 'ADMIN_CREDIT_CRYPTO',
         entityType: 'CryptoHolding',
-        entityId: userId,
-        newValues: JSON.stringify(dto),
+        entityId: user.id,
+        newValues: JSON.stringify({ ...ref, quantity: Number(quantity), reason: dto.reason || null }),
       },
     });
 
     await this.prisma.notification.create({
       data: {
-        userId,
-        title: `${dto.coinName} Credited to Your Portfolio`,
-        message: `${dto.quantity} ${dto.coinSymbol.toUpperCase()} has been credited to your crypto portfolio.`,
+        userId: user.id,
+        title: `${ref.coinSymbol} credited`,
+        message: `${quantity.toString()} ${ref.coinSymbol} was credited to your crypto portfolio.${dto.reason ? ` Reason: ${dto.reason}` : ''}`,
         type: 'success',
       },
     });
 
-    return { message: 'Crypto credited successfully', ...dto };
+    return { message: 'Crypto credited', ...ref, quantity: Number(quantity) };
   }
 
-  async deleteUser(userId: string, adminId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new NotFoundException('User not found');
-    if (user.role === 'super_admin') throw new BadRequestException('Cannot delete a super_admin account');
-    if (userId === adminId) throw new BadRequestException('Cannot delete your own account');
+  async deleteUser(userId: string, actor: Actor) {
+    const user = await this.loadTarget(userId);
+    this.assertCanManage(actor, user);
 
     await this.prisma.$transaction(async (tx) => {
-      // Delete child records in dependency order before deleting user
-      const accounts = await tx.account.findMany({ where: { userId } });
+      const accounts = await tx.account.findMany({ where: { userId }, select: { id: true } });
       const accountIds = accounts.map((a) => a.id);
 
-      await tx.transaction.deleteMany({
-        where: { OR: [{ senderAccountId: { in: accountIds } }, { receiverAccountId: { in: accountIds } }] },
-      });
-      await tx.account.deleteMany({ where: { userId } });
-      await tx.cryptoOrder.deleteMany({ where: { userId } });
-      await tx.cryptoHolding.deleteMany({ where: { userId } });
-      await tx.investment.deleteMany({ where: { userId } });
+      // Keep counterparties' ledgers intact: detach rather than delete shared transactions.
+      await tx.transaction.updateMany({ where: { senderAccountId: { in: accountIds } }, data: { senderAccountId: null } });
+      await tx.transaction.updateMany({ where: { receiverAccountId: { in: accountIds } }, data: { receiverAccountId: null } });
+      await tx.transaction.updateMany({ where: { performedByAdminId: userId }, data: { performedByAdminId: null } });
+      await tx.kycDocument.updateMany({ where: { reviewerId: userId }, data: { reviewerId: null } });
+      await tx.loan.updateMany({ where: { approvedBy: userId }, data: { approvedBy: null } });
+      await tx.auditLog.updateMany({ where: { userId }, data: { userId: null } });
+
       await tx.loan.deleteMany({ where: { userId } });
-      await tx.kycDocument.deleteMany({ where: { userId } });
-      await tx.notification.deleteMany({ where: { userId } });
-      await tx.auditLog.deleteMany({ where: { userId } });
-      await tx.user.delete({ where: { id: userId } });
+      await tx.beneficiary.deleteMany({ where: { userId } });
+      await tx.account.deleteMany({ where: { userId } });
+      await tx.user.delete({ where: { id: userId } }); // remaining relations cascade
     });
 
     await this.prisma.auditLog.create({
       data: {
-        userId: adminId,
+        userId: actor.id,
         action: 'DELETE_USER',
         entityType: 'User',
         entityId: userId,
@@ -409,151 +357,95 @@ export class AdminService {
       },
     });
 
-    return { message: 'User account permanently deleted', userId };
+    return { message: 'User deleted', userId };
   }
 
-  async getAuditLogs(page: number = 1, limit: number = 50) {
+  async getAuditLogs(page = 1, limit = 50) {
     const skip = (page - 1) * limit;
     const [logs, total] = await Promise.all([
       this.prisma.auditLog.findMany({
         skip,
         take: limit,
-        include: {
-          user: { select: { id: true, fullName: true, email: true } },
-        },
+        include: { user: { select: { id: true, fullName: true, email: true } } },
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.auditLog.count(),
     ]);
-
-    return {
-      logs,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+    return { logs, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
-  async adjustBalance(
-    customerId: string,
-    dto: AdjustBalanceDto,
-    adminId: string,
-    adminEmail: string,
-    ipAddress?: string,
-  ) {
-    // ── Validate inputs ────────────────────────────────────────────────────────
-    if (!dto.type || !['credit', 'debit'].includes(dto.type)) {
-      throw new BadRequestException('type must be "credit" or "debit"');
-    }
+  async adjustBalance(customerId: string, dto: AdjustBalanceDto, actor: Actor, ipAddress?: string) {
     const amount = Number(dto.amount);
-    if (!amount || amount <= 0 || !Number.isFinite(amount)) {
-      throw new BadRequestException('amount must be a positive number');
-    }
-    // Max 2 decimal places
-    if (parseFloat(amount.toFixed(2)) !== amount && Math.round(amount * 100) / 100 !== amount) {
-      // lenient — just truncate to 2dp silently
-    }
+    if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException('amount must be a positive number');
     if (amount > MAX_SINGLE_ADJUSTMENT) {
-      throw new BadRequestException(
-        `Single adjustment cannot exceed $${MAX_SINGLE_ADJUSTMENT.toLocaleString('en-US')}. Contact a super-admin for larger adjustments.`,
-      );
+      throw new BadRequestException(`A single adjustment cannot exceed $${money(MAX_SINGLE_ADJUSTMENT)}`);
     }
-    if (!dto.reason || dto.reason.trim().length < 5) {
-      throw new BadRequestException('reason must be at least 5 characters');
-    }
-    if (!dto.accountId) {
-      throw new BadRequestException('accountId is required');
-    }
+    const reason = dto.reason?.trim();
+    if (!reason || reason.length < 5) throw new BadRequestException('reason must be at least 5 characters');
 
-    // ── Fetch & verify account ─────────────────────────────────────────────────
-    const account = await this.prisma.account.findUnique({
-      where: { id: dto.accountId },
-    });
+    const account = await this.prisma.account.findUnique({ where: { id: dto.accountId } });
     if (!account) throw new NotFoundException('Account not found');
-    if (account.userId !== customerId) {
-      throw new BadRequestException('Account does not belong to the specified customer');
-    }
+    if (account.userId !== customerId) throw new BadRequestException('Account does not belong to this customer');
 
     const decimal = new Decimal(amount.toFixed(2));
     const balanceBefore = Number(account.balance);
+    const txRef = newReference(dto.type === 'credit' ? 'ADJ-CR' : 'ADJ-DB');
 
-    // ── Debit: check sufficient balance ───────────────────────────────────────
-    if (dto.type === 'debit') {
-      if (account.balance.lessThan(decimal)) {
-        throw new BadRequestException(
-          `Insufficient balance. Account has $${Number(account.balance).toLocaleString('en-US', { minimumFractionDigits: 2 })} but debit of $${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} was requested.`,
-        );
-      }
-    }
-
-    const txRef =
-      (dto.type === 'credit' ? 'ADMIN-CR-' : 'ADMIN-DB-') +
-      Date.now() +
-      '-' +
-      Math.floor(Math.random() * 10000);
-
-    // ── Atomic transaction ────────────────────────────────────────────────────
     const txRecord = await this.prisma.$transaction(async (tx) => {
-      // Update account balance atomically (increment/decrement — no read-then-write race)
-      await tx.account.update({
-        where: { id: dto.accountId },
-        data: {
-          balance:
-            dto.type === 'credit'
-              ? { increment: decimal }
-              : { decrement: decimal },
-          availableBalance:
-            dto.type === 'credit'
-              ? { increment: decimal }
-              : { decrement: decimal },
-        },
-      });
+      if (dto.type === 'debit') {
+        const debited = await tx.account.updateMany({
+          where: { id: account.id, availableBalance: { gte: decimal } },
+          data: { balance: { decrement: decimal }, availableBalance: { decrement: decimal } },
+        });
+        if (debited.count !== 1) {
+          throw new BadRequestException(`Insufficient available balance for a $${money(decimal)} debit`);
+        }
+      } else {
+        await tx.account.update({
+          where: { id: account.id },
+          data: { balance: { increment: decimal }, availableBalance: { increment: decimal } },
+        });
+      }
 
-      // Create transaction ledger record
-      const createdTx = await tx.transaction.create({
+      return tx.transaction.create({
         data: {
           transactionReference: txRef,
-          senderAccountId: dto.type === 'debit' ? dto.accountId : null,
-          receiverAccountId: dto.type === 'credit' ? dto.accountId : null,
+          senderAccountId: dto.type === 'debit' ? account.id : null,
+          receiverAccountId: dto.type === 'credit' ? account.id : null,
           amount: decimal,
           fee: new Decimal(0),
           currency: account.currency,
           status: 'completed',
           type: dto.type === 'credit' ? 'admin_credit' : 'admin_debit',
-          description: `Admin ${dto.type === 'credit' ? 'Credit' : 'Debit'}: ${dto.reason.trim()}`,
-          reason: dto.reason.trim(),
+          description: `${dto.type === 'credit' ? 'Credit' : 'Debit'} adjustment: ${reason}`,
+          reason,
           adminReference: dto.reference?.trim() || null,
-          performedByAdminId: adminId,
+          performedByAdminId: actor.id,
           ipAddress: ipAddress || null,
         },
       });
-
-      return createdTx;
     });
 
-    // Fetch updated balance for response & audit log
     const updatedAccount = await this.prisma.account.findUnique({
-      where: { id: dto.accountId },
+      where: { id: account.id },
       select: { balance: true, availableBalance: true },
     });
     const balanceAfter = Number(updatedAccount!.balance);
 
-    // ── Audit log ─────────────────────────────────────────────────────────────
     await this.prisma.auditLog.create({
       data: {
-        userId: adminId,
+        userId: actor.id,
         action: dto.type === 'credit' ? 'ADMIN_CREDIT_ACCOUNT' : 'ADMIN_DEBIT_ACCOUNT',
         entityType: 'Account',
-        entityId: dto.accountId,
+        entityId: account.id,
         oldValues: JSON.stringify({ balance: balanceBefore }),
         newValues: JSON.stringify({
           balance: balanceAfter,
           amount,
           type: dto.type,
-          reason: dto.reason.trim(),
+          reason,
           reference: dto.reference || null,
-          adminEmail,
+          adminEmail: actor.email,
           customerId,
           transactionReference: txRef,
         }),
@@ -561,35 +453,24 @@ export class AdminService {
       },
     });
 
-    // ── Customer notification ─────────────────────────────────────────────────
     await this.prisma.notification.create({
       data: {
         userId: customerId,
-        title:
-          dto.type === 'credit'
-            ? 'Funds Credited to Your Account'
-            : 'Funds Debited from Your Account',
-        message:
-          dto.type === 'credit'
-            ? `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} has been credited to account ${account.accountNumber}. Reason: ${dto.reason.trim()}. New balance: $${balanceAfter.toLocaleString('en-US', { minimumFractionDigits: 2 })}.`
-            : `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} has been debited from account ${account.accountNumber}. Reason: ${dto.reason.trim()}. New balance: $${balanceAfter.toLocaleString('en-US', { minimumFractionDigits: 2 })}.`,
+        title: dto.type === 'credit' ? 'Account credited' : 'Account debited',
+        message: `$${money(amount)} was ${dto.type === 'credit' ? 'credited to' : 'debited from'} ${account.accountNumber}. Reason: ${reason}.`,
         type: dto.type === 'credit' ? 'success' : 'warning',
       },
     });
 
     return {
-      message: `Account ${dto.type === 'credit' ? 'credited' : 'debited'} successfully`,
+      message: `Account ${dto.type === 'credit' ? 'credited' : 'debited'}`,
       transaction: txRecord,
       updatedBalance: balanceAfter,
       availableBalance: Number(updatedAccount!.availableBalance),
     };
   }
 
-  /** Helper used by the legacy credit endpoint to resolve the account owner. */
   async getAccountOwner(accountId: string): Promise<{ userId: string } | null> {
-    return this.prisma.account.findUnique({
-      where: { id: accountId },
-      select: { userId: true },
-    });
+    return this.prisma.account.findUnique({ where: { id: accountId }, select: { userId: true } });
   }
 }

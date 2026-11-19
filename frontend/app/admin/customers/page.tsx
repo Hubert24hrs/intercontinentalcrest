@@ -1,638 +1,394 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import {
-  Search, UserCheck, UserX, Eye, Loader2, RefreshCw, X,
-  ShieldAlert, Trash2, DollarSign, ArrowUpCircle, ArrowDownCircle,
-  CheckCircle2, AlertTriangle,
-} from "lucide-react";
-import { adminApi } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { Search, Snowflake, Trash2, Users } from "lucide-react";
+import { adminApi, cryptoApi } from "@/lib/api";
+import { useAsync } from "@/lib/useAsync";
+import { accountLabel, formatCrypto, formatDate, formatDateTime, formatMoney, formatRelative, toNumber } from "@/lib/format";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Field";
+import { Alert } from "@/components/ui/Alert";
+import { Badge, StatusBadge } from "@/components/ui/Badge";
+import { Modal } from "@/components/ui/Modal";
+import { Avatar, EmptyState, PageHeader, Segmented, Skeleton } from "@/components/ui/misc";
+import { useSessionContext } from "@/components/app/SessionContext";
+import { queryParam } from "@/lib/url";
 
-const statusColors: Record<string, string> = {
-  active: "bg-green-50 text-green-700 border border-green-200",
-  suspended: "bg-red-50 text-red-600 border border-red-200",
-  inactive: "bg-gray-50 text-gray-600 border border-gray-200",
-  pending_verification: "bg-yellow-50 text-yellow-700 border border-yellow-200",
-};
+const LIMIT = 20;
 
-export default function AdminCustomersPage() {
-  const [users, setUsers] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [search, setSearch] = useState("");
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [loading, setLoading] = useState(true);
-
-  // Selected customer for modal inspect
-  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
-  const [customerDetail, setCustomerDetail] = useState<any>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [deletingUser, setDeletingUser] = useState(false);
-
-  // ── Adjust Balance Modal State ────────────────────────────────────────────
-  const [adjustModalOpen, setAdjustModalOpen] = useState(false);
-  const [adjustAccount, setAdjustAccount] = useState<any>(null);
-  const [adjustType, setAdjustType] = useState<"credit" | "debit">("credit");
-  const [adjustAmount, setAdjustAmount] = useState("");
-  const [adjustReason, setAdjustReason] = useState("");
-  const [adjustRef, setAdjustRef] = useState("");
-  const [adjusting, setAdjusting] = useState(false);
-  const [adjustSuccess, setAdjustSuccess] = useState("");
-  const [adjustError, setAdjustError] = useState("");
-
-  const parsedAmount = parseFloat(adjustAmount) || 0;
-  const previewBalance = adjustAccount
-    ? adjustType === "credit"
-      ? parseFloat(adjustAccount.balance) + parsedAmount
-      : parseFloat(adjustAccount.balance) - parsedAmount
-    : 0;
-
-  function openAdjustModal(acc: any) {
-    setAdjustAccount(acc);
-    setAdjustType("credit");
-    setAdjustAmount("");
-    setAdjustReason("");
-    setAdjustRef("");
-    setAdjustSuccess("");
-    setAdjustError("");
-    setAdjustModalOpen(true);
-  }
-
-  function closeAdjustModal() {
-    setAdjustModalOpen(false);
-    setAdjustAccount(null);
-  }
-
-  async function handleAdjustBalance(e: React.FormEvent) {
-    e.preventDefault();
-    if (!adjustAccount || !selectedCustomerId) return;
-
-    const amount = parseFloat(adjustAmount);
-    if (!amount || amount <= 0) {
-      setAdjustError("Please enter a valid positive amount.");
-      return;
-    }
-    if (adjustReason.trim().length < 5) {
-      setAdjustError("Reason must be at least 5 characters.");
-      return;
-    }
-
-    const currentBal = parseFloat(adjustAccount.balance);
-    const action = adjustType === "credit"
-      ? `credit $${amount.toLocaleString("en-US", { minimumFractionDigits: 2 })} to`
-      : `debit $${amount.toLocaleString("en-US", { minimumFractionDigits: 2 })} from`;
-
-    if (
-      !confirm(
-        `Are you sure you want to ${action} account ${adjustAccount.accountNumber}?\n\n` +
-        `Current balance: $${currentBal.toLocaleString("en-US", { minimumFractionDigits: 2 })}\n` +
-        `New balance: $${previewBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}\n\n` +
-        `Reason: ${adjustReason.trim()}\n\nThis action will be fully logged in the audit trail.`
-      )
-    ) return;
-
-    setAdjusting(true);
-    setAdjustError("");
-    setAdjustSuccess("");
-    try {
-      const result = await adminApi.adjustBalance(selectedCustomerId, {
-        type: adjustType,
-        amount,
-        accountId: adjustAccount.id,
-        reason: adjustReason.trim(),
-        reference: adjustRef.trim() || undefined,
-      });
-      setAdjustSuccess(
-        `✓ Account ${adjustType === "credit" ? "credited" : "debited"} successfully. ` +
-        `New balance: $${Number(result.updatedBalance).toLocaleString("en-US", { minimumFractionDigits: 2 })}`
-      );
-      setAdjustAmount("");
-      setAdjustReason("");
-      setAdjustRef("");
-      // Refresh customer detail so balances update live
-      await handleViewDetail(selectedCustomerId);
-      setTimeout(() => setAdjustSuccess(""), 6000);
-    } catch (err: any) {
-      setAdjustError(err?.message || "Failed to adjust balance.");
-    } finally {
-      setAdjusting(false);
-    }
-  }
-
-  // Load clients list
-  async function loadCustomers(pageNum = page) {
-    setLoading(true);
-    try {
-      const res = await adminApi.getUsers({
-        page: pageNum,
-        limit: 15,
-        search: search || undefined,
-        status: filterStatus === "all" ? undefined : filterStatus
-      });
-      setUsers(res.users || []);
-      setTotal(res.total || 0);
-      setTotalPages(res.totalPages || 1);
-    } catch (err) {
-      console.error("Failed to load customer list", err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
+function useDebounced<T>(value: T, ms = 300) {
+  const [v, setV] = useState(value);
   useEffect(() => {
-    loadCustomers();
-  }, [page, filterStatus]);
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}
 
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setPage(1);
-    loadCustomers(1);
-  };
+function CustomerDetail({ id, onChanged, onClose }: { id: string; onChanged: () => void; onClose: () => void }) {
+  const { user: me } = useSessionContext();
+  const { data: u, loading, error, reload } = useAsync(() => adminApi.getUserDetail(id), [id]);
+  const markets = useAsync(() => cryptoApi.getMarkets() as Promise<any[]>);
+  const [tab, setTab] = useState<"accounts" | "crypto" | "lending" | "kyc">("accounts");
+  const [msg, setMsg] = useState<{ tone: "success" | "danger"; text: string } | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  const handleUpdateStatus = async (userId: string, newStatus: string) => {
-    try {
-      await adminApi.updateUserStatus(userId, newStatus);
-      await loadCustomers();
-      if (selectedCustomerId === userId) {
-        handleViewDetail(userId);
+  const [adj, setAdj] = useState({ accountId: "", type: "credit" as "credit" | "debit", amount: "", reason: "", reference: "" });
+  const [credit, setCredit] = useState({ coinId: "bitcoin", quantity: "", reason: "" });
+
+
+  const act = useCallback(
+    async (key: string, fn: () => Promise<any>, ok: string) => {
+      setBusy(key);
+      setMsg(null);
+      try {
+        await fn();
+        setMsg({ tone: "success", text: ok });
+        await reload({ silent: true });
+        onChanged();
+      } catch (err: any) {
+        setMsg({ tone: "danger", text: err.message });
+      } finally {
+        setBusy(null);
       }
-    } catch (err) {
-      alert("Failed to update status");
-    }
-  };
+    },
+    [reload, onChanged],
+  );
 
-  const handleUpdateRole = async (userId: string, newRole: string) => {
-    try {
-      await adminApi.updateUserRole(userId, newRole);
-      await loadCustomers();
-      if (selectedCustomerId === userId) {
-        handleViewDetail(userId);
-      }
-    } catch (err) {
-      alert("Failed to update role");
-    }
-  };
+  if (loading) return <Skeleton className="h-64" />;
+  if (error || !u) return <Alert tone="danger">{error || "Customer not found"}</Alert>;
 
-  const handleDeleteUser = async (userId: string, fullName: string) => {
-    if (!confirm(`Permanently delete "${fullName}"? This cannot be undone.`)) return;
-    setDeletingUser(true);
-    try {
-      await adminApi.deleteUser(userId);
-      setSelectedCustomerId(null);
-      setCustomerDetail(null);
-      await loadCustomers();
-    } catch (err: any) {
-      alert(err?.message || "Failed to delete user");
-    } finally {
-      setDeletingUser(false);
-    }
-  };
-
-  const handleToggleFreeze = async (accountId: string, currentFrozen: boolean) => {
-    try {
-      await adminApi.toggleAccountFreeze(accountId, !currentFrozen);
-      if (selectedCustomerId) {
-        handleViewDetail(selectedCustomerId);
-      }
-    } catch (err) {
-      alert("Failed to change account freeze state");
-    }
-  };
-
-  const handleViewDetail = async (userId: string) => {
-    setSelectedCustomerId(userId);
-    setLoadingDetail(true);
-    try {
-      const detail = await adminApi.getUserDetail(userId);
-      setCustomerDetail(detail);
-    } catch (err) {
-      console.error("Failed to load customer details", err);
-    } finally {
-      setLoadingDetail(false);
-    }
-  };
+  const adjAccountId = u.accounts.find((a: any) => a.id === adj.accountId)?.id || u.accounts[0]?.id || "";
+  const isSelf = me?.id === u.id;
+  const privileged = u.role === "admin" || u.role === "super_admin";
+  const canManage = !isSelf && u.role !== "super_admin" && (!privileged || me?.role === "super_admin");
+  const totalCash = u.accounts.reduce((s: number, a: any) => s + toNumber(a.balance), 0);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-display font-bold text-brand-secondary text-2xl">Customer Management</h1>
-          <p className="text-gray-500 text-sm mt-0.5">{total} total registered clients on record</p>
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <Avatar name={u.fullName} className="size-12 text-sm" />
+          <div>
+            <p className="text-lg font-semibold">{u.fullName}</p>
+            <p className="text-sm text-fg-subtle">
+              {u.email}
+              {u.phone ? ` · ${u.phone}` : ""}
+            </p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              <StatusBadge status={u.status} />
+              <Badge tone={privileged ? "dark" : "neutral"}>{u.role.replace("_", " ")}</Badge>
+              {u.twoFactorEnabled && <Badge tone="brand">2FA on</Badge>}
+            </div>
+          </div>
+        </div>
+        <div className="text-right text-sm">
+          <p className="text-fg-subtle">Total cash</p>
+          <p className="num text-xl font-semibold">{formatMoney(totalCash)}</p>
+          <p className="text-xs text-fg-faint">Joined {formatDate(u.createdAt)} · last sign in {u.lastLogin ? formatRelative(u.lastLogin) : "never"}</p>
         </div>
       </div>
 
-      {/* Filters form */}
-      <form onSubmit={handleSearchSubmit} className="dashboard-card bg-white border border-gray-100 p-5 rounded-2xl">
-        <div className="flex flex-col sm:flex-row gap-3">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input
-              type="text"
-              className="form-input pl-10"
-              placeholder="Search by name, email, phone..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-          <select
-            className="form-input max-w-xs"
-            value={filterStatus}
-            onChange={(e) => { setFilterStatus(e.target.value); setPage(1); }}
+      {msg && <Alert tone={msg.tone}>{msg.text}</Alert>}
+
+      {canManage && (
+        <div className="flex flex-wrap gap-2 rounded-2xl bg-surface p-3">
+          {u.status === "active" ? (
+            <Button variant="secondary" size="sm" loading={busy === "status"} onClick={() => act("status", () => adminApi.updateUserStatus(u.id, "suspended"), "Customer suspended. They are signed out immediately.")}>
+              Suspend
+            </Button>
+          ) : (
+            <Button variant="secondary" size="sm" loading={busy === "status"} onClick={() => act("status", () => adminApi.updateUserStatus(u.id, "active"), "Customer reactivated.")}>
+              Reactivate
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-danger-600 hover:bg-danger-50 hover:text-danger-700"
+            loading={busy === "delete"}
+            onClick={() => {
+              if (!confirm(`Permanently delete ${u.fullName} and all of their accounts? This cannot be undone.`)) return;
+              setBusy("delete");
+              adminApi
+                .deleteUser(u.id)
+                .then(() => {
+                  onChanged();
+                  onClose();
+                })
+                .catch((err) => setMsg({ tone: "danger", text: err.message }))
+                .finally(() => setBusy(null));
+            }}
           >
-            <option value="all">All Statuses</option>
+            <Trash2 className="size-3.5" /> Delete customer
+          </Button>
+        </div>
+      )}
+
+      <Segmented
+        value={tab}
+        onChange={setTab}
+        size="sm"
+        options={[
+          { value: "accounts", label: `Accounts (${u.accounts.length})` },
+          { value: "crypto", label: `Crypto (${u.cryptoHoldings.length})` },
+          { value: "lending", label: `Loans & investments` },
+          { value: "kyc", label: "Verification" },
+        ]}
+      />
+
+      {tab === "accounts" && (
+        <div className="space-y-5">
+          <div className="divide-y divide-line rounded-2xl border border-line">
+            {u.accounts.map((a: any) => (
+              <div key={a.id} className="flex flex-wrap items-center gap-3 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{accountLabel(a)}</p>
+                  <p className="font-mono text-xs text-fg-subtle">{a.accountNumber}</p>
+                </div>
+                <p className="num text-sm font-semibold">{formatMoney(a.balance)}</p>
+                {a.isFrozen && <Badge tone="info"><Snowflake className="size-3" /> Frozen</Badge>}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={busy === `freeze-${a.id}`}
+                  onClick={() => act(`freeze-${a.id}`, () => adminApi.toggleAccountFreeze(a.id, !a.isFrozen), a.isFrozen ? "Account unfrozen." : "Account frozen.")}
+                >
+                  {a.isFrozen ? "Unfreeze" : "Freeze"}
+                </Button>
+              </div>
+            ))}
+            {u.accounts.length === 0 && <p className="px-4 py-6 text-center text-sm text-fg-subtle">No accounts.</p>}
+          </div>
+
+          {u.accounts.length > 0 && (
+            <form
+              className="space-y-4 rounded-2xl border border-line p-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                act(
+                  "adjust",
+                  () =>
+                    adminApi.adjustBalance(u.id, {
+                      accountId: adjAccountId,
+                      type: adj.type,
+                      amount: toNumber(adj.amount),
+                      reason: adj.reason.trim(),
+                      reference: adj.reference.trim() || undefined,
+                    }),
+                  `${adj.type === "credit" ? "Credited" : "Debited"} ${formatMoney(adj.amount)}.`,
+                ).then(() => setAdj((a) => ({ ...a, amount: "", reason: "", reference: "" })));
+              }}
+            >
+              <div>
+                <p className="text-sm font-semibold">Balance adjustment</p>
+                <p className="text-xs text-fg-subtle">Recorded on the customer&apos;s ledger, notified to them, and written to the audit log. Max $500,000 per adjustment.</p>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <Select value={adjAccountId} onChange={(e) => setAdj({ ...adj, accountId: e.target.value })} aria-label="Account">
+                  {u.accounts.map((a: any) => (
+                    <option key={a.id} value={a.id}>
+                      {accountLabel(a)} · {a.accountNumber}
+                    </option>
+                  ))}
+                </Select>
+                <Select value={adj.type} onChange={(e) => setAdj({ ...adj, type: e.target.value as any })} aria-label="Type">
+                  <option value="credit">Credit</option>
+                  <option value="debit">Debit</option>
+                </Select>
+                <Input placeholder="Amount" inputMode="decimal" value={adj.amount} onChange={(e) => setAdj({ ...adj, amount: e.target.value.replace(/[^0-9.]/g, "") })} leading={<span className="text-sm">$</span>} aria-label="Amount" />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-[2fr_1fr]">
+                <Input placeholder="Reason (shown to the customer)" value={adj.reason} onChange={(e) => setAdj({ ...adj, reason: e.target.value })} maxLength={500} aria-label="Reason" />
+                <Input placeholder="Internal reference (optional)" value={adj.reference} onChange={(e) => setAdj({ ...adj, reference: e.target.value })} maxLength={100} aria-label="Reference" />
+              </div>
+              <Button type="submit" size="sm" loading={busy === "adjust"} disabled={!(toNumber(adj.amount) > 0) || adj.reason.trim().length < 5}>
+                Apply adjustment
+              </Button>
+            </form>
+          )}
+        </div>
+      )}
+
+      {tab === "crypto" && (
+        <div className="space-y-5">
+          <div className="divide-y divide-line rounded-2xl border border-line">
+            {u.cryptoHoldings.length === 0 && <p className="px-4 py-6 text-center text-sm text-fg-subtle">No crypto holdings.</p>}
+            {u.cryptoHoldings.map((h: any) => (
+              <div key={h.id} className="flex items-center justify-between px-4 py-3 text-sm">
+                <span className="font-medium">{h.coinName}</span>
+                <span className="num">{formatCrypto(h.quantity, h.coinSymbol)}</span>
+              </div>
+            ))}
+          </div>
+          <form
+            className="space-y-3 rounded-2xl border border-line p-4"
+            onSubmit={(e) => {
+              e.preventDefault();
+              act("crypto", () => adminApi.creditCrypto(u.id, { coinId: credit.coinId, quantity: toNumber(credit.quantity), reason: credit.reason.trim() || undefined }), "Crypto credited.").then(() =>
+                setCredit((c) => ({ ...c, quantity: "", reason: "" })),
+              );
+            }}
+          >
+            <p className="text-sm font-semibold">Credit crypto</p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Select value={credit.coinId} onChange={(e) => setCredit({ ...credit, coinId: e.target.value })} aria-label="Asset">
+                {(markets.data ?? []).map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </Select>
+              <Input placeholder="Quantity" inputMode="decimal" value={credit.quantity} onChange={(e) => setCredit({ ...credit, quantity: e.target.value.replace(/[^0-9.]/g, "") })} aria-label="Quantity" />
+              <Input placeholder="Reason" value={credit.reason} onChange={(e) => setCredit({ ...credit, reason: e.target.value })} aria-label="Reason" />
+            </div>
+            <Button type="submit" size="sm" loading={busy === "crypto"} disabled={!(toNumber(credit.quantity) > 0)}>
+              Credit
+            </Button>
+          </form>
+        </div>
+      )}
+
+      {tab === "lending" && (
+        <div className="space-y-4">
+          <div>
+            <p className="mb-2 text-sm font-semibold">Loans</p>
+            <div className="divide-y divide-line rounded-2xl border border-line">
+              {u.loans.length === 0 && <p className="px-4 py-4 text-sm text-fg-subtle">No loans.</p>}
+              {u.loans.map((l: any) => (
+                <div key={l.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+                  <span>
+                    <span className="font-medium capitalize">{l.loanType}</span> · {l.termMonths} mo · SSN {l.ssn || "N/A"}
+                  </span>
+                  <span className="flex items-center gap-2">
+                    <span className="num font-medium">{formatMoney(l.principalAmount)}</span>
+                    <StatusBadge status={l.status} />
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="mb-2 text-sm font-semibold">Investments</p>
+            <div className="divide-y divide-line rounded-2xl border border-line">
+              {u.investments.length === 0 && <p className="px-4 py-4 text-sm text-fg-subtle">No investments.</p>}
+              {u.investments.map((i: any) => (
+                <div key={i.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+                  <span className="font-medium">{i.planName}</span>
+                  <span className="flex items-center gap-2">
+                    <span className="num">{formatMoney(i.currentValue ?? i.principalAmount)}</span>
+                    <StatusBadge status={i.status} />
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "kyc" && (
+        <div className="divide-y divide-line rounded-2xl border border-line">
+          {u.kycDocuments.length === 0 && <p className="px-4 py-6 text-center text-sm text-fg-subtle">No verification submitted.</p>}
+          {u.kycDocuments.map((k: any) => (
+            <div key={k.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+              <span>
+                <span className="font-medium capitalize">{k.documentType.replace(/_/g, " ")}</span> · submitted {formatDateTime(k.submittedAt)}
+              </span>
+              <StatusBadge status={k.status} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function CustomersPage() {
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [page, setPage] = useState(1);
+  const [openId, setOpenId] = useState<string | null>(() => queryParam("id"));
+  const q = useDebounced(search);
+
+  const { data, loading, error, reload } = useAsync(() => adminApi.getUsers({ page, limit: LIMIT, search: q || undefined, status: status || undefined }), [page, q, status]);
+
+  return (
+    <div>
+      <PageHeader title="Customers" description={data ? `${data.total.toLocaleString()} people` : "Search, review and manage customer accounts."} />
+
+      <Card className="overflow-hidden">
+        <div className="flex flex-col gap-3 border-b border-line p-4 sm:flex-row sm:p-5">
+          <Input wrapperClassName="flex-1" placeholder="Search by name, email, phone or account number" value={search} onChange={(e) => (setSearch(e.target.value), setPage(1))} leading={<Search className="size-4" />} aria-label="Search customers" />
+          <Select value={status} onChange={(e) => (setStatus(e.target.value), setPage(1))} wrapperClassName="sm:w-48" aria-label="Status">
+            <option value="">All statuses</option>
             <option value="active">Active</option>
             <option value="suspended">Suspended</option>
             <option value="inactive">Inactive</option>
-            <option value="pending_verification">Pending verification</option>
-          </select>
-          <button type="submit" className="btn-primary text-sm px-5 py-2.5">
-            Search
-          </button>
+          </Select>
         </div>
-      </form>
-
-      {/* List content */}
-      <div className="dashboard-card bg-white border border-gray-100 p-6 rounded-2xl">
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 text-gray-400">
-            <Loader2 className="w-8 h-8 animate-spin text-brand-primary mb-2" />
-            <span className="text-xs">Fetching clients index...</span>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="text-xs text-gray-400 border-b border-gray-100 font-semibold">
-                  <th className="py-3 pr-4">Customer</th>
-                  <th className="py-3 pr-4 hidden md:table-cell">Phone</th>
-                  <th className="py-3 pr-4">Role</th>
-                  <th className="py-3 pr-4">Status</th>
-                  <th className="py-3 pr-4 hidden lg:table-cell">Created At</th>
-                  <th className="py-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50 text-xs">
-                {users.map((c) => (
-                  <tr key={c.id} className="hover:bg-gray-50/50 transition-colors">
-                    <td className="py-3.5 pr-4">
+        <div className="overflow-x-auto">
+          <table className="table min-w-[760px]">
+            <thead>
+              <tr>
+                <th>Customer</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th className="text-right">Accounts</th>
+                <th className="text-right">Loans</th>
+                <th>Joined</th>
+                <th>Last sign in</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && [0, 1, 2, 3].map((i) => <tr key={i}><td colSpan={7}><Skeleton className="h-6" /></td></tr>)}
+              {!loading &&
+                data?.users.map((u: any) => (
+                  <tr key={u.id} className="cursor-pointer" onClick={() => setOpenId(u.id)}>
+                    <td>
                       <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-brand-primary/10 flex items-center justify-center text-brand-primary font-bold text-sm flex-shrink-0 uppercase">
-                          {c.fullName.charAt(0)}
-                        </div>
-                        <div>
-                          <div className="font-semibold text-brand-secondary text-sm">{c.fullName}</div>
-                          <div className="text-gray-400 text-xs font-mono">{c.email}</div>
+                        <Avatar name={u.fullName} />
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">{u.fullName}</p>
+                          <p className="truncate text-xs text-fg-subtle">{u.email}</p>
                         </div>
                       </div>
                     </td>
-                    <td className="py-3.5 pr-4 text-gray-600 font-mono hidden md:table-cell">{c.phone || "Not Set"}</td>
-                    <td className="py-3.5 pr-4">
-                      <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700 font-semibold uppercase">{c.role}</span>
+                    <td className="capitalize text-fg-muted">{u.role.replace("_", " ")}</td>
+                    <td>
+                      <StatusBadge status={u.status} />
                     </td>
-                    <td className="py-3.5 pr-4">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${statusColors[c.status]}`}>{c.status}</span>
-                    </td>
-                    <td className="py-3.5 pr-4 text-gray-500 hidden lg:table-cell">{new Date(c.createdAt).toLocaleDateString()}</td>
-                    <td className="py-3.5 text-right space-x-1">
-                      <button
-                        onClick={() => handleViewDetail(c.id)}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-gray-50 border border-gray-200 hover:border-brand-primary hover:text-brand-primary rounded-xl font-bold transition-all"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        Inspect
-                      </button>
-                    </td>
+                    <td className="num text-right">{u._count.accounts}</td>
+                    <td className="num text-right">{u._count.loans}</td>
+                    <td className="text-fg-muted">{formatDate(u.createdAt)}</td>
+                    <td className="text-fg-muted">{u.lastLogin ? formatRelative(u.lastLogin) : "Never"}</td>
                   </tr>
                 ))}
-                {users.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="py-12 text-center text-gray-400">No client accounts found matching the criteria.</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+            </tbody>
+          </table>
+        </div>
+        {!loading && error && <p className="px-6 py-4 text-sm text-danger-600">{error}</p>}
+        {!loading && data?.users.length === 0 && <EmptyState icon={<Users className="size-5" />} title="No customers found" description="Try a different search." />}
+        {data && data.totalPages > 1 && (
+          <div className="flex items-center justify-between border-t border-line px-5 py-3 text-sm">
+            <span className="text-fg-subtle">
+              Page {data.page} of {data.totalPages}
+            </span>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                Previous
+              </Button>
+              <Button variant="secondary" size="sm" disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>
+                Next
+              </Button>
+            </div>
           </div>
         )}
-      </div>
+      </Card>
 
-      {/* Customer Detail Inspector Modal */}
-      {selectedCustomerId && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="p-6 border-b border-gray-100 flex items-center justify-between text-brand-secondary">
-              <h2 className="font-display font-bold text-lg">Customer Account Inspector</h2>
-              <button onClick={() => setSelectedCustomerId(null)} className="p-2 hover:bg-gray-100 rounded-full">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-6 space-y-6 text-sm">
-              {loadingDetail ? (
-                <div className="flex flex-col items-center justify-center py-20 text-gray-400">
-                  <Loader2 className="w-8 h-8 animate-spin text-brand-primary mb-2" />
-                  <span>Loading ledger connections...</span>
-                </div>
-              ) : customerDetail ? (
-                <div className="space-y-6">
-                  {/* General Profile Row */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 bg-gray-50 p-5 rounded-2xl border border-gray-100">
-                    <div>
-                      <div className="text-[10px] text-gray-400 uppercase font-semibold">Full Client Name</div>
-                      <div className="font-bold text-brand-secondary text-sm mt-0.5">{customerDetail.fullName}</div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] text-gray-400 uppercase font-semibold">Email & Phone</div>
-                      <div className="font-mono text-xs text-brand-secondary mt-0.5">{customerDetail.email}</div>
-                      <div className="font-mono text-xs text-gray-500">{customerDetail.phone || "No phone number"}</div>
-                    </div>
-                    <div>
-                      <div className="text-[10px] text-gray-400 uppercase font-semibold">Global Status / Role</div>
-                      <div className="flex gap-2 items-center mt-1">
-                        <select
-                          value={customerDetail.status}
-                          onChange={(e) => handleUpdateStatus(customerDetail.id, e.target.value)}
-                          className="bg-white border border-gray-200 text-xs px-2 py-1 rounded font-bold"
-                        >
-                          <option value="active">Active</option>
-                          <option value="suspended">Suspended</option>
-                          <option value="inactive">Inactive</option>
-                        </select>
-                        <select
-                          value={customerDetail.role}
-                          onChange={(e) => handleUpdateRole(customerDetail.id, e.target.value)}
-                          className="bg-white border border-gray-200 text-xs px-2 py-1 rounded font-bold"
-                        >
-                          <option value="customer">Customer</option>
-                          <option value="admin">Admin</option>
-                          <option value="super_admin">Super Admin</option>
-                          <option value="support">Support</option>
-                        </select>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Bank Accounts list */}
-                  <div className="space-y-3">
-                    <h3 className="font-display font-bold text-brand-secondary text-sm">Funding & Checking Accounts</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {customerDetail.accounts?.map((acc: any) => (
-                        <div key={acc.id} className="p-4 border border-gray-100 rounded-2xl shadow-sm bg-white">
-                          <div className="flex justify-between items-start mb-3">
-                            <div>
-                              <div className="font-bold text-brand-secondary text-xs uppercase">{acc.accountType} Account</div>
-                              <div className="text-[10px] text-gray-400 font-mono mt-0.5">{acc.accountNumber}</div>
-                              <div className="font-mono font-bold text-brand-primary text-sm mt-1">
-                                ${parseFloat(acc.balance).toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                              </div>
-                            </div>
-                            <button
-                              onClick={() => handleToggleFreeze(acc.id, acc.isFrozen)}
-                              className={`px-3 py-1.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all ${
-                                acc.isFrozen
-                                  ? "bg-red-50 text-red-600 border border-red-200 hover:bg-red-100"
-                                  : "bg-gray-50 text-gray-600 border border-gray-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200"
-                              }`}
-                            >
-                              <ShieldAlert className="w-3.5 h-3.5" />
-                              {acc.isFrozen ? "Frozen" : "Freeze"}
-                            </button>
-                          </div>
-                          {/* Adjust Balance Button */}
-                          <button
-                            onClick={() => openAdjustModal(acc)}
-                            className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-brand-primary/8 border border-brand-primary/20 text-brand-primary rounded-xl font-bold text-xs hover:bg-brand-primary hover:text-white transition-all"
-                          >
-                            <DollarSign className="w-3.5 h-3.5" />
-                            Adjust Balance
-                          </button>
-                        </div>
-                      ))}
-                      {(!customerDetail.accounts || customerDetail.accounts.length === 0) && (
-                        <p className="text-xs text-gray-400 col-span-2">This customer has no active bank accounts.</p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Crypto Holdings list */}
-                  <div className="space-y-3">
-                    <h3 className="font-display font-bold text-brand-secondary text-sm">Crypto Asset Holdings</h3>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      {customerDetail.cryptoHoldings?.map((ch: any) => {
-                        const qty = parseFloat(ch.quantity || 0);
-                        const avg = parseFloat(ch.avgBuyPrice || 0);
-                        return (
-                          <div key={ch.id} className="p-3.5 bg-gray-50 border border-gray-200/50 rounded-2xl text-xs">
-                            <div className="font-bold text-brand-secondary flex items-baseline gap-1.5">
-                              {ch.coinName}
-                              <span className="text-[9px] text-gray-400 uppercase font-mono">{ch.coinSymbol}</span>
-                            </div>
-                            <div className="text-[10px] text-gray-500 mt-1 font-mono">
-                              Qty: {qty.toFixed(6)}
-                            </div>
-                            <div className="text-[10px] text-gray-400 font-mono">
-                              Avg cost: ${avg.toLocaleString("en-US", { maximumFractionDigits: 2 })}
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {(!customerDetail.cryptoHoldings || customerDetail.cryptoHoldings.length === 0) && (
-                        <p className="text-xs text-gray-400 col-span-3">This customer holds no cryptocurrency.</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="text-center py-10 text-gray-400">Failed to retrieve details.</div>
-              )}
-            </div>
-
-            <div className="p-5 border-t border-gray-100 bg-gray-55 flex items-center justify-between">
-              {customerDetail && (
-                <button
-                  onClick={() => handleDeleteUser(customerDetail.id, customerDetail.fullName)}
-                  disabled={deletingUser}
-                  className="flex items-center gap-1.5 px-4 py-2.5 bg-red-50 border border-red-200 text-red-600 rounded-full font-semibold hover:bg-red-100 transition-colors text-xs disabled:opacity-50"
-                >
-                  {deletingUser ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                  Delete Account
-                </button>
-              )}
-              <button
-                onClick={() => setSelectedCustomerId(null)}
-                className="px-5 py-2.5 bg-brand-secondary text-white rounded-full font-semibold hover:bg-brand-primary transition-colors text-xs"
-              >
-                Close Inspector
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Adjust Balance Modal ─────────────────────────────────────────────── */}
-      {adjustModalOpen && adjustAccount && (
-        <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
-            {/* Header */}
-            <div className="p-5 border-b border-gray-100 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="w-9 h-9 rounded-xl bg-brand-primary/10 flex items-center justify-center">
-                  <DollarSign className="w-4 h-4 text-brand-primary" />
-                </div>
-                <div>
-                  <h3 className="font-display font-bold text-brand-secondary text-sm">Adjust Account Balance</h3>
-                  <p className="text-[10px] text-gray-400 font-mono">{adjustAccount.accountNumber}</p>
-                </div>
-              </div>
-              <button onClick={closeAdjustModal} className="p-2 hover:bg-gray-100 rounded-full">
-                <X className="w-4 h-4 text-gray-500" />
-              </button>
-            </div>
-
-            <form onSubmit={handleAdjustBalance} className="p-5 space-y-4">
-              {/* Success / Error banners */}
-              {adjustSuccess && (
-                <div className="flex items-start gap-2 bg-green-50 border border-green-200 text-green-700 p-3 rounded-xl text-xs">
-                  <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>{adjustSuccess}</span>
-                </div>
-              )}
-              {adjustError && (
-                <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-xs">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                  <span>{adjustError}</span>
-                </div>
-              )}
-
-              {/* Current balance info */}
-              <div className="bg-gray-50 rounded-xl p-3 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Current Balance</span>
-                  <span className="font-mono font-bold text-brand-secondary">
-                    ${parseFloat(adjustAccount.balance).toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-                {parsedAmount > 0 && (
-                  <div className="flex justify-between mt-1.5 pt-1.5 border-t border-gray-200">
-                    <span className="text-gray-500">After Adjustment</span>
-                    <span className={`font-mono font-bold text-sm ${adjustType === "credit" ? "text-green-600" : previewBalance < 0 ? "text-red-600" : "text-amber-600"}`}>
-                      ${previewBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Credit / Debit Toggle */}
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1.5">Adjustment Type</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => { setAdjustType("credit"); setAdjustError(""); }}
-                    className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs border transition-all ${
-                      adjustType === "credit"
-                        ? "bg-green-50 border-green-400 text-green-700"
-                        : "bg-white border-gray-200 text-gray-500 hover:border-green-300"
-                    }`}
-                  >
-                    <ArrowUpCircle className="w-4 h-4" />
-                    Credit (Add Funds)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setAdjustType("debit"); setAdjustError(""); }}
-                    className={`flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs border transition-all ${
-                      adjustType === "debit"
-                        ? "bg-red-50 border-red-400 text-red-600"
-                        : "bg-white border-gray-200 text-gray-500 hover:border-red-300"
-                    }`}
-                  >
-                    <ArrowDownCircle className="w-4 h-4" />
-                    Debit (Remove Funds)
-                  </button>
-                </div>
-              </div>
-
-              {/* Amount */}
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1.5">Amount (USD)</label>
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 font-bold text-gray-400 text-sm">$</span>
-                  <input
-                    type="number"
-                    min="0.01"
-                    max="500000"
-                    step="0.01"
-                    required
-                    value={adjustAmount}
-                    onChange={(e) => setAdjustAmount(e.target.value)}
-                    placeholder="0.00"
-                    className="form-input pl-7 font-mono"
-                  />
-                </div>
-                <span className="text-[10px] text-gray-400 mt-0.5 block">Max single adjustment: $500,000</span>
-              </div>
-
-              {/* Reason */}
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1.5">
-                  Reason <span className="text-red-500">*</span>
-                </label>
-                <textarea
-                  required
-                  minLength={5}
-                  rows={2}
-                  value={adjustReason}
-                  onChange={(e) => setAdjustReason(e.target.value)}
-                  placeholder="e.g. Manual deposit correction, Bonus credit, Chargeback reversal..."
-                  className="form-input resize-none text-xs"
-                />
-                <span className="text-[10px] text-gray-400 mt-0.5 block">Min 5 characters. Stored in audit log.</span>
-              </div>
-
-              {/* Reference (optional) */}
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1.5">Internal Reference / Ticket # <span className="text-gray-400 font-normal">(optional)</span></label>
-                <input
-                  type="text"
-                  value={adjustRef}
-                  onChange={(e) => setAdjustRef(e.target.value)}
-                  placeholder="e.g. TICKET-1234, TKT-20260711"
-                  className="form-input text-xs font-mono"
-                />
-              </div>
-
-              {/* Actions */}
-              <div className="flex gap-3 pt-1">
-                <button
-                  type="button"
-                  onClick={closeAdjustModal}
-                  className="flex-1 py-2.5 border border-gray-200 rounded-xl font-semibold text-xs text-gray-600 hover:bg-gray-50 transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={adjusting}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl font-bold text-xs text-white transition-all disabled:opacity-60 ${
-                    adjustType === "credit"
-                      ? "bg-green-600 hover:bg-green-700"
-                      : "bg-red-500 hover:bg-red-600"
-                  }`}
-                >
-                  {adjusting ? (
-                    <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Processing...</>
-                  ) : adjustType === "credit" ? (
-                    <><ArrowUpCircle className="w-3.5 h-3.5" /> Confirm Credit</>
-                  ) : (
-                    <><ArrowDownCircle className="w-3.5 h-3.5" /> Confirm Debit</>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <Modal open={!!openId} onOpenChange={(o) => !o && setOpenId(null)} title="Customer details" size="xl">
+        {openId && <CustomerDetail id={openId} onChanged={() => reload({ silent: true })} onClose={() => setOpenId(null)} />}
+      </Modal>
     </div>
   );
 }

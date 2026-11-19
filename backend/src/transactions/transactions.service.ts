@@ -1,21 +1,16 @@
-import {
-  Injectable,
-  BadRequestException,
-  NotFoundException,
-  ForbiddenException,
-} from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Decimal } from '@prisma/client/runtime/library';
 import { NotificationsService } from '../notifications/notifications.service';
+import { TransferDto } from './dto/transfer.dto';
+import { newReference } from '../common/pagination';
 
-export interface TransferDto {
-  fromAccountId: string;
-  toAccountNumber?: string;
-  toBeneficiaryId?: string;
-  amount: number;
-  description?: string;
-  currency?: string;
-  type?: string;
+const INTERNATIONAL_WIRE_FEE = new Decimal(3);
+
+const CREDIT_TYPES = new Set(['credit', 'admin_credit', 'crypto_deposit', 'loan_disbursement', 'deposit']);
+
+function money(n: Decimal | number): string {
+  return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 @Injectable()
@@ -25,27 +20,38 @@ export class TransactionsService {
     private notificationsService: NotificationsService,
   ) {}
 
+  /**
+   * Direction of a ledger entry from the point of view of `ownIds`
+   * (all of the user's accounts, or one account when filtering).
+   */
+  private flowFor(tx: { senderAccountId: string | null; receiverAccountId: string | null; type: string }, ownIds: string[]) {
+    const isSender = !!tx.senderAccountId && ownIds.includes(tx.senderAccountId);
+    const isReceiver = !!tx.receiverAccountId && ownIds.includes(tx.receiverAccountId);
+    if (isSender && isReceiver) return { flow: 'internal' as const, isInternal: true };
+    if (isReceiver) return { flow: 'credit' as const, isInternal: false };
+    if (isSender) return { flow: 'debit' as const, isInternal: false };
+    return { flow: CREDIT_TYPES.has(tx.type) ? ('credit' as const) : ('debit' as const), isInternal: false };
+  }
+
   async getTransactionsByUserId(
     userId: string,
-    page: number = 1,
-    limit: number = 20,
+    page = 1,
+    limit = 20,
     type?: string,
     status?: string,
+    accountId?: string,
   ) {
     const skip = (page - 1) * limit;
 
-    // Get all account IDs for this user
-    const accounts = await this.prisma.account.findMany({
-      where: { userId },
-      select: { id: true },
-    });
-    const accountIds = accounts.map((a) => a.id);
+    const accounts = await this.prisma.account.findMany({ where: { userId }, select: { id: true } });
+    let accountIds = accounts.map((a) => a.id);
+    if (accountId) {
+      if (!accountIds.includes(accountId)) throw new ForbiddenException('Access denied');
+      accountIds = [accountId];
+    }
 
     const whereClause: any = {
-      OR: [
-        { senderAccountId: { in: accountIds } },
-        { receiverAccountId: { in: accountIds } },
-      ],
+      OR: [{ senderAccountId: { in: accountIds } }, { receiverAccountId: { in: accountIds } }],
     };
     if (type) whereClause.type = type;
     if (status) whereClause.status = status;
@@ -64,25 +70,12 @@ export class TransactionsService {
       this.prisma.transaction.count({ where: whereClause }),
     ]);
 
-    const mappedTransactions = transactions.map((tx) => {
-      const isReceiver = tx.receiverAccountId && accountIds.includes(tx.receiverAccountId);
-      const isSender = tx.senderAccountId && accountIds.includes(tx.senderAccountId);
-      
-      let flow = 'debit';
-      if (isReceiver && !isSender) {
-        flow = 'credit';
-      } else if (tx.type === 'credit' || tx.type === 'admin_credit' || tx.type === 'crypto_deposit') {
-        flow = 'credit';
-      }
-      
-      return {
-        ...tx,
-        flow,
-      };
-    });
-
     return {
-      transactions: mappedTransactions,
+      transactions: transactions.map((tx) => {
+        // Never expose admin-only bookkeeping fields to customers.
+        const { performedByAdminId, adminReference, ipAddress, ...rest } = tx as any;
+        return { ...rest, ...this.flowFor(tx, accountIds) };
+      }),
       total,
       page,
       limit,
@@ -91,94 +84,81 @@ export class TransactionsService {
   }
 
   async transfer(userId: string, dto: TransferDto) {
-    const fromAccountId = dto.fromAccountId || (dto as any).senderAccountId;
-    const toAccountNumber = dto.toAccountNumber || (dto as any).receiverAccountNumber;
+    const fromAccountId = dto.fromAccountId || dto.senderAccountId;
+    const toAccountNumber = (dto.toAccountNumber || dto.receiverAccountNumber || '').trim();
+    if (!fromAccountId) throw new BadRequestException('Choose the account to send from');
+    if (!toAccountNumber) throw new BadRequestException('Enter the recipient account number');
 
-    // Validate sender account belongs to user
-    const senderAccount = await this.prisma.account.findUnique({
-      where: { id: fromAccountId },
-    });
-    if (!senderAccount) throw new NotFoundException('Source account not found');
-    if (senderAccount.userId !== userId)
-      throw new ForbiddenException('Account does not belong to you');
-    if (senderAccount.isFrozen)
-      throw new BadRequestException('Source account is frozen');
-
-    const amount = new Decimal(dto.amount);
-
-    if (senderAccount.availableBalance.lessThan(amount)) {
-      throw new BadRequestException('Insufficient funds');
+    const senderAccount = await this.prisma.account.findUnique({ where: { id: fromAccountId } });
+    if (!senderAccount || senderAccount.userId !== userId) throw new NotFoundException('Source account not found');
+    if (senderAccount.isFrozen) throw new BadRequestException('This account is frozen. Contact support.');
+    if (senderAccount.accountNumber === toAccountNumber) {
+      throw new BadRequestException('You cannot transfer to the same account');
     }
 
-    // Find receiver account
-    let receiverAccount = null;
-    if (toAccountNumber) {
-      receiverAccount = await this.prisma.account.findUnique({
-        where: { accountNumber: toAccountNumber },
-      });
+    const receiverAccount = await this.prisma.account.findUnique({ where: { accountNumber: toAccountNumber } });
+    if (receiverAccount?.isFrozen) {
+      throw new BadRequestException('The recipient account cannot receive funds right now');
     }
 
-    const txRef = 'TXN-' + Date.now() + '-' + Math.floor(Math.random() * 10000);
-    const isInternational = dto.type === 'international' || dto.type === 'international_transfer';
-    const fee = new Decimal(isInternational ? 3.00 : 0);
+    const type = dto.type || 'transfer';
+    const amount = new Decimal(dto.amount.toFixed(2));
+    const fee = type === 'international_transfer' ? INTERNATIONAL_WIRE_FEE : new Decimal(0);
     const totalDeduction = amount.plus(fee);
+    const txRef = newReference('TXN');
+    const description = dto.description?.trim() || (type === 'bill_payment' ? 'Bill payment' : 'Fund transfer');
 
     const transaction = await this.prisma.$transaction(async (tx) => {
-      // Deduct from sender
-      await tx.account.update({
-        where: { id: senderAccount.id },
-        data: {
-          balance: { decrement: totalDeduction },
-          availableBalance: { decrement: totalDeduction },
-        },
+      // Conditional decrement: succeeds only if the funds are still available,
+      // which makes concurrent transfers unable to overdraw the account.
+      const debited = await tx.account.updateMany({
+        where: { id: senderAccount.id, isFrozen: false, availableBalance: { gte: totalDeduction } },
+        data: { balance: { decrement: totalDeduction }, availableBalance: { decrement: totalDeduction } },
       });
+      if (debited.count !== 1) {
+        throw new BadRequestException(
+          fee.greaterThan(0)
+            ? `Insufficient funds. This transfer needs $${money(totalDeduction)} including the $${money(fee)} fee.`
+            : 'Insufficient funds',
+        );
+      }
 
-      // Credit receiver (if internal)
       if (receiverAccount) {
         await tx.account.update({
           where: { id: receiverAccount.id },
-          data: {
-            balance: { increment: amount },
-            availableBalance: { increment: amount },
-          },
+          data: { balance: { increment: amount }, availableBalance: { increment: amount } },
         });
       }
 
-      // Create transaction record
-      const record = await tx.transaction.create({
+      return tx.transaction.create({
         data: {
           transactionReference: txRef,
           senderAccountId: senderAccount.id,
           receiverAccountId: receiverAccount?.id ?? null,
           amount,
           fee,
-          currency: dto.currency || 'USD',
+          currency: 'USD',
           status: 'completed',
-          type: dto.type || 'transfer',
-          description: dto.description || 'Fund Transfer',
+          type,
+          description,
+          metadata: receiverAccount ? null : JSON.stringify({ externalAccount: toAccountNumber }),
         },
       });
-
-      return record;
     });
 
     try {
-      const formattedAmount = `$${Number(amount).toLocaleString('en-US', { minimumFractionDigits: 2 })} ${dto.currency || 'USD'}`;
-
-      // Notify Sender
+      const destination = receiverAccount ? receiverAccount.accountNumber : toAccountNumber;
       await this.notificationsService.createNotification(
         userId,
-        'Fund Transfer Sent',
-        `Successfully transferred ${formattedAmount} to ${toAccountNumber || receiverAccount?.accountNumber || 'External Account'}. Description: ${dto.description || 'Fund Transfer'}. Reference: ${txRef}`,
+        type === 'bill_payment' ? 'Bill payment sent' : 'Transfer sent',
+        `$${money(amount)} was sent from ${senderAccount.accountNumber} to ${destination}${fee.greaterThan(0) ? ` (fee $${money(fee)})` : ''}. Reference ${txRef}.`,
         'info',
       );
-
-      // Notify Receiver (if internal)
-      if (receiverAccount) {
+      if (receiverAccount && receiverAccount.userId !== userId) {
         await this.notificationsService.createNotification(
           receiverAccount.userId,
-          'Funds Received',
-          `Account ${receiverAccount.accountNumber} has been credited with ${formattedAmount} from ${senderAccount.accountNumber}. Reference: ${txRef}`,
+          'Funds received',
+          `$${money(amount)} was credited to ${receiverAccount.accountNumber}. Reference ${txRef}.`,
           'success',
         );
       }
@@ -186,14 +166,11 @@ export class TransactionsService {
       console.error('Failed to trigger transfer notifications:', err);
     }
 
-    return transaction;
+    return { ...transaction, flow: 'debit', isInternal: !!receiverAccount && receiverAccount.userId === userId };
   }
 
   async getTransactionById(userId: string, transactionId: string) {
-    const accounts = await this.prisma.account.findMany({
-      where: { userId },
-      select: { id: true },
-    });
+    const accounts = await this.prisma.account.findMany({ where: { userId }, select: { id: true } });
     const accountIds = accounts.map((a) => a.id);
 
     const transaction = await this.prisma.transaction.findUnique({
@@ -203,78 +180,14 @@ export class TransactionsService {
         receiverAccount: { select: { accountNumber: true, accountType: true } },
       },
     });
-
     if (!transaction) throw new NotFoundException('Transaction not found');
 
     const belongsToUser =
-      (transaction.senderAccountId && accountIds.includes(transaction.senderAccountId)) ||
-      (transaction.receiverAccountId && accountIds.includes(transaction.receiverAccountId));
+      (!!transaction.senderAccountId && accountIds.includes(transaction.senderAccountId)) ||
+      (!!transaction.receiverAccountId && accountIds.includes(transaction.receiverAccountId));
+    if (!belongsToUser) throw new NotFoundException('Transaction not found');
 
-    if (!belongsToUser) throw new ForbiddenException('Access denied');
-
-    const isReceiver = transaction.receiverAccountId && accountIds.includes(transaction.receiverAccountId);
-    const isSender = transaction.senderAccountId && accountIds.includes(transaction.senderAccountId);
-    
-    let flow = 'debit';
-    if (isReceiver && !isSender) {
-      flow = 'credit';
-    } else if (transaction.type === 'credit' || transaction.type === 'admin_credit' || transaction.type === 'crypto_deposit') {
-      flow = 'credit';
-    }
-
-    return {
-      ...transaction,
-      flow,
-    };
-  }
-
-  async getAllTransactions(
-    page: number = 1,
-    limit: number = 20,
-    status?: string,
-  ) {
-    const skip = (page - 1) * limit;
-    const whereClause: any = {};
-    if (status) whereClause.status = status;
-
-    const [transactions, total] = await Promise.all([
-      this.prisma.transaction.findMany({
-        where: whereClause,
-        skip,
-        take: limit,
-        include: {
-          senderAccount: {
-            include: { user: { select: { fullName: true, email: true } } },
-          },
-          receiverAccount: {
-            include: { user: { select: { fullName: true, email: true } } },
-          },
-        },
-        orderBy: { createdAt: 'desc' },
-      }),
-      this.prisma.transaction.count({ where: whereClause }),
-    ]);
-
-    return {
-      transactions,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
-  }
-
-  async reverseTransaction(transactionId: string) {
-    const tx = await this.prisma.transaction.findUnique({
-      where: { id: transactionId },
-    });
-    if (!tx) throw new NotFoundException('Transaction not found');
-    if (tx.status !== 'completed')
-      throw new BadRequestException('Only completed transactions can be reversed');
-
-    return this.prisma.transaction.update({
-      where: { id: transactionId },
-      data: { status: 'reversed' },
-    });
+    const { performedByAdminId, adminReference, ipAddress, ...rest } = transaction as any;
+    return { ...rest, ...this.flowFor(transaction, accountIds) };
   }
 }

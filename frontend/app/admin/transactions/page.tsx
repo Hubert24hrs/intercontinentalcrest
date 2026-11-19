@@ -1,248 +1,119 @@
 "use client";
 
-import { Search, ArrowUpRight, ArrowDownLeft, Eye, Filter, Loader2, RefreshCw } from "lucide-react";
-import { useState, useEffect, useMemo } from "react";
+import { useEffect, useState } from "react";
+import { ListOrdered, Search } from "lucide-react";
 import { adminApi } from "@/lib/api";
+import { useAsync } from "@/lib/useAsync";
+import { formatDateTime, formatMoney, toNumber, TX_TYPE_LABEL } from "@/lib/format";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Input, Select } from "@/components/ui/Field";
+import { StatusBadge } from "@/components/ui/Badge";
+import { EmptyState, PageHeader, Skeleton } from "@/components/ui/misc";
 
-const statusColors: Record<string, string> = {
-  completed: "bg-green-50 text-green-700 border border-green-200",
-  pending: "bg-yellow-50 text-yellow-700 border border-yellow-200",
-  failed: "bg-red-50 text-red-600 border border-red-200",
-  reversed: "bg-gray-50 text-gray-600 border border-gray-200",
-};
+const LIMIT = 25;
 
 export default function AdminTransactionsPage() {
-  const [transactions, setTransactions] = useState<any[]>([]);
-  const [totalCount, setTotalCount] = useState(0);
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [filterStatus, setFilterStatus] = useState("all");
   const [search, setSearch] = useState("");
-  const [loading, setLoading] = useState(true);
-
-  async function loadTransactions() {
-    setLoading(true);
-    try {
-      const res = await adminApi.getTransactions({
-        page,
-        limit: 15,
-        status: filterStatus === "all" ? undefined : filterStatus
-      });
-      setTransactions(res.transactions || []);
-      setTotalCount(res.total || 0);
-      setTotalPages(res.totalPages || 1);
-    } catch (err) {
-      console.error("Failed to load admin transactions", err);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState("");
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
-    loadTransactions();
-  }, [page, filterStatus]);
+    const t = setTimeout(() => setQ(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
 
-  // Client side search matching ID, sender email, or receiver email
-  const filtered = useMemo(() => {
-    return transactions.filter((t) => {
-      const matchSearch = 
-        t.transactionReference.toLowerCase().includes(search.toLowerCase()) ||
-        (t.senderAccount?.user?.fullName && t.senderAccount.user.fullName.toLowerCase().includes(search.toLowerCase())) ||
-        (t.receiverAccount?.user?.fullName && t.receiverAccount.user.fullName.toLowerCase().includes(search.toLowerCase())) ||
-        t.description?.toLowerCase().includes(search.toLowerCase());
-      return matchSearch;
-    });
-  }, [transactions, search]);
-
-  const summaries = useMemo(() => {
-    let volume = 0;
-    let pendingCount = 0;
-    let completedCount = 0;
-
-    transactions.forEach((t) => {
-      const val = parseFloat(t.amount);
-      volume += val;
-      if (t.status === "pending") pendingCount++;
-      if (t.status === "completed") completedCount++;
-    });
-
-    return {
-      volume,
-      pendingCount,
-      completedCount
-    };
-  }, [transactions]);
+  const { data, loading, error } = useAsync(() => adminApi.getTransactions({ page, limit: LIMIT, status: status || undefined, search: q || undefined }), [page, status, q]);
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="font-display font-bold text-brand-secondary text-2xl">Transaction Ledger Management</h1>
-          <p className="text-gray-500 text-sm mt-0.5">Audit, track, and monitor all platform currency transactions.</p>
+    <div>
+      <PageHeader title="Transactions" description={data ? `${data.total.toLocaleString()} ledger entries` : "Monitor money moving across the platform."} />
+      <Card className="overflow-hidden">
+        <div className="flex flex-col gap-3 border-b border-line p-4 sm:flex-row sm:p-5">
+          <Input wrapperClassName="flex-1" placeholder="Search reference, description or account number" value={search} onChange={(e) => (setSearch(e.target.value), setPage(1))} leading={<Search className="size-4" />} aria-label="Search transactions" />
+          <Select value={status} onChange={(e) => (setStatus(e.target.value), setPage(1))} wrapperClassName="sm:w-48" aria-label="Status">
+            <option value="">All statuses</option>
+            <option value="completed">Completed</option>
+            <option value="pending">Pending</option>
+            <option value="failed">Failed</option>
+            <option value="reversed">Reversed</option>
+          </Select>
         </div>
-        <button 
-          onClick={loadTransactions}
-          className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-xl hover:bg-gray-50 text-sm font-semibold text-gray-700 bg-white shadow-sm"
-        >
-          <RefreshCw className="w-4 h-4 text-gray-500" />
-          Refresh Ledger
-        </button>
-      </div>
-
-      {/* Summary Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {[
-          { label: "Visible Volume Ledger", value: `$${summaries.volume.toLocaleString("en-US", { minimumFractionDigits: 2 })}`, sub: "Value of transactions shown" },
-          { label: "Pending Wire Audits", value: summaries.pendingCount, sub: "Requires clearance" },
-          { label: "Processed Operations", value: summaries.completedCount, sub: "Settled successfully" },
-        ].map((s) => (
-          <div key={s.label} className="dashboard-card bg-white border border-gray-100 p-5 rounded-2xl shadow-sm">
-            <div className="font-display font-bold text-2xl text-brand-secondary">{s.value}</div>
-            <div className="font-semibold text-gray-600 text-xs mt-1">{s.label}</div>
-            <div className="text-gray-400 text-[10px] mt-0.5">{s.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      <div className="dashboard-card bg-white border border-gray-100 p-6 rounded-2xl shadow-sm">
-        <div className="flex flex-col sm:flex-row gap-3 mb-5">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input type="text" className="form-input pl-10" placeholder="Search by reference, sender or receiver..." value={search} onChange={(e) => setSearch(e.target.value)} />
-          </div>
-          <div className="flex gap-2">
-            {["all", "completed", "pending", "failed"].map((f) => (
-              <button key={f} onClick={() => { setFilterStatus(f); setPage(1); }} className={`px-4 py-2 rounded-xl text-xs font-semibold transition-colors capitalize ${filterStatus === f ? "bg-brand-primary text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
-                {f}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-20 text-gray-400">
-            <Loader2 className="w-8 h-8 animate-spin text-brand-primary mb-2" />
-            <span className="text-xs">Fetching transactions list...</span>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left">
-              <thead>
-                <tr className="text-xs text-gray-400 border-b border-gray-100 font-semibold">
-                  <th className="py-3 pr-4">Transaction Ref</th>
-                  <th className="py-3 pr-4">Sender Account</th>
-                  <th className="py-3 pr-4">Receiver Account</th>
-                  <th className="py-3 pr-4">Type</th>
-                  <th className="py-3 pr-4 hidden md:table-cell">Date</th>
-                  <th className="py-3 pr-4">Status</th>
-                  <th className="py-3 text-right">Amount</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50 text-xs">
-                {filtered.map((tx) => {
-                  const date = new Date(tx.createdAt);
-                  
-                  // Label transaction types nicely
-                  let typeLabel = tx.type;
-                  let typeClass = "bg-gray-100 text-gray-700";
-                  
-                  if (tx.type === "admin_credit") {
-                    typeLabel = "Admin Credit";
-                    typeClass = "bg-purple-50 text-purple-700 border border-purple-200";
-                  } else if (tx.type === "admin_debit") {
-                    typeLabel = "Admin Debit";
-                    typeClass = "bg-indigo-50 text-indigo-700 border border-indigo-200";
-                  } else if (tx.type === "loan_disbursement") {
-                    typeLabel = "Loan Disb";
-                    typeClass = "bg-pink-50 text-pink-700 border border-pink-200";
-                  } else if (tx.type === "transfer") {
-                    typeLabel = "Transfer";
-                    typeClass = "bg-blue-50 text-blue-700 border border-blue-200";
-                  } else if (tx.type === "investment") {
-                    typeLabel = "Investment";
-                    typeClass = "bg-amber-50 text-amber-700 border border-amber-200";
-                  } else if (tx.type === "credit") {
-                    typeLabel = "Deposit/Credit";
-                    typeClass = "bg-teal-50 text-teal-700 border border-teal-200";
-                  } else if (tx.type === "debit") {
-                    typeLabel = "Withdrawal/Debit";
-                    typeClass = "bg-orange-50 text-orange-700 border border-orange-200";
-                  }
-
-                  return (
-                    <tr key={tx.id} className="hover:bg-gray-50/50 transition-colors text-gray-700">
-                      <td className="py-3.5 pr-4 font-mono font-bold text-brand-secondary">
-                        <div>{tx.transactionReference}</div>
-                        {tx.description && <div className="text-[10px] text-gray-400 font-normal mt-0.5">{tx.description}</div>}
-                      </td>
-                      <td className="py-3.5 pr-4">
-                        {tx.senderAccount ? (
-                          <>
-                            <div className="font-semibold text-brand-secondary">{tx.senderAccount.user?.fullName}</div>
-                            <div className="text-[10px] text-gray-400 font-mono">{tx.senderAccount.accountNumber} ({tx.senderAccount.accountType.toUpperCase()})</div>
-                          </>
-                        ) : (
-                          <span className="text-gray-400 font-semibold italic">External/System</span>
-                        )}
-                      </td>
-                      <td className="py-3.5 pr-4">
-                        {tx.receiverAccount ? (
-                          <>
-                            <div className="font-semibold text-brand-secondary">{tx.receiverAccount.user?.fullName}</div>
-                            <div className="text-[10px] text-gray-400 font-mono">{tx.receiverAccount.accountNumber} ({tx.receiverAccount.accountType.toUpperCase()})</div>
-                          </>
-                        ) : (
-                          <span className="text-gray-400 font-semibold italic">External/System</span>
-                        )}
-                      </td>
-                      <td className="py-3.5 pr-4">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${typeClass}`}>
-                          {typeLabel}
-                        </span>
-                      </td>
-                      <td className="py-3.5 pr-4 text-gray-500 font-mono hidden md:table-cell">{date.toLocaleString()}</td>
-                      <td className="py-3.5 pr-4">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border ${statusColors[tx.status]}`}>{tx.status}</span>
-                      </td>
-                      <td className="py-3.5 text-right font-display font-bold text-sm text-brand-secondary">
-                        ${parseFloat(tx.amount).toLocaleString("en-US", { minimumFractionDigits: 2 })} <span className="text-gray-400 font-normal text-xs">{tx.currency}</span>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {filtered.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="py-12 text-center text-gray-400">No wire transaction logs match selected filters.</td>
+        <div className="overflow-x-auto">
+          <table className="table min-w-[900px]">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Reference</th>
+                <th>Type</th>
+                <th>From</th>
+                <th>To</th>
+                <th className="text-right">Amount</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading && [0, 1, 2, 3].map((i) => <tr key={i}><td colSpan={7}><Skeleton className="h-6" /></td></tr>)}
+              {!loading &&
+                data?.transactions.map((t: any) => (
+                  <tr key={t.id}>
+                    <td className="whitespace-nowrap text-fg-muted">{formatDateTime(t.createdAt)}</td>
+                    <td className="font-mono text-xs">{t.transactionReference}</td>
+                    <td>
+                      <p>{TX_TYPE_LABEL[t.type] || t.type}</p>
+                      {t.performedByAdmin && <p className="text-xs text-fg-subtle">by {t.performedByAdmin.fullName}</p>}
+                    </td>
+                    <td>
+                      {t.senderAccount ? (
+                        <>
+                          <p className="text-sm">{t.senderAccount.user?.fullName}</p>
+                          <p className="font-mono text-xs text-fg-subtle">{t.senderAccount.accountNumber}</p>
+                        </>
+                      ) : (
+                        <span className="text-fg-faint">External / system</span>
+                      )}
+                    </td>
+                    <td>
+                      {t.receiverAccount ? (
+                        <>
+                          <p className="text-sm">{t.receiverAccount.user?.fullName}</p>
+                          <p className="font-mono text-xs text-fg-subtle">{t.receiverAccount.accountNumber}</p>
+                        </>
+                      ) : (
+                        <span className="text-fg-faint">External</span>
+                      )}
+                    </td>
+                    <td className="num text-right font-semibold">
+                      {formatMoney(t.amount)}
+                      {toNumber(t.fee) > 0 && <span className="block text-xs font-normal text-fg-subtle">fee {formatMoney(t.fee)}</span>}
+                    </td>
+                    <td>
+                      <StatusBadge status={t.status} />
+                    </td>
                   </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Pager */}
-        {!loading && totalPages > 1 && (
-          <div className="flex justify-between items-center pt-4 border-t border-gray-100 text-xs mt-4">
-            <span className="text-gray-400">Page {page} of {totalPages} (Total {totalCount} records)</span>
+                ))}
+            </tbody>
+          </table>
+        </div>
+        {!loading && error && <p className="px-6 py-4 text-sm text-danger-600">{error}</p>}
+        {!loading && data?.transactions.length === 0 && <EmptyState icon={<ListOrdered className="size-5" />} title="No transactions found" />}
+        {data && data.totalPages > 1 && (
+          <div className="flex items-center justify-between border-t border-line px-5 py-3 text-sm">
+            <span className="text-fg-subtle">
+              Page {data.page} of {data.totalPages}
+            </span>
             <div className="flex gap-2">
-              <button 
-                disabled={page === 1}
-                onClick={() => setPage(page - 1)}
-                className="px-3 py-1.5 border border-gray-200 rounded-xl hover:bg-gray-50 text-xs font-semibold disabled:opacity-50"
-              >
-                Prev
-              </button>
-              <button 
-                disabled={page === totalPages}
-                onClick={() => setPage(page + 1)}
-                className="px-3 py-1.5 border border-gray-200 rounded-xl hover:bg-gray-50 text-xs font-semibold disabled:opacity-50"
-              >
+              <Button variant="secondary" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                Previous
+              </Button>
+              <Button variant="secondary" size="sm" disabled={page >= data.totalPages} onClick={() => setPage((p) => p + 1)}>
                 Next
-              </button>
+              </Button>
             </div>
           </div>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

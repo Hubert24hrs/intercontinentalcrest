@@ -6,6 +6,10 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { Decimal } from '@prisma/client/runtime/library';
 import { NotificationsService } from '../notifications/notifications.service';
+import { creditCoins, debitCoins } from './crypto-ledger';
+import { newReference } from '../common/pagination';
+
+const TRADING_FEE_RATE = new Decimal('0.005'); // 0.5%
 
 // ─── In-memory price cache to avoid hammering CoinGecko's free tier ───────────
 interface PriceCache {
@@ -45,6 +49,7 @@ const SUPPORTED_COINS = [
   'bitcoin',
   'ethereum',
   'tether',
+  'usd-coin',
   'binancecoin',
   'solana',
   'ripple',
@@ -82,6 +87,7 @@ export class CryptoService {
       'bitcoin': { name: 'Bitcoin', symbol: 'btc', price: 64120, rank: 1, img: 'https://coin-images.coingecko.com/coins/images/1/large/bitcoin.png?1696501400' },
       'ethereum': { name: 'Ethereum', symbol: 'eth', price: 3450, rank: 2, img: 'https://coin-images.coingecko.com/coins/images/279/large/ethereum.png?1696501400' },
       'tether': { name: 'Tether', symbol: 'usdt', price: 1.00, rank: 3, img: 'https://coin-images.coingecko.com/coins/images/325/large/Tether.png?1696501400' },
+      'usd-coin': { name: 'USDC', symbol: 'usdc', price: 1.00, rank: 7, img: 'https://coin-images.coingecko.com/coins/images/6319/large/usdc.png?1696506694' },
       'binancecoin': { name: 'BNB', symbol: 'bnb', price: 585, rank: 4, img: 'https://coin-images.coingecko.com/coins/images/825/large/binance-coin-logo.png?1696501400' },
       'solana': { name: 'Solana', symbol: 'sol', price: 145.8, rank: 5, img: 'https://coin-images.coingecko.com/coins/images/4128/large/solana.png?1696501400' },
       'ripple': { name: 'Ripple', symbol: 'xrp', price: 0.49, rank: 6, img: 'https://coin-images.coingecko.com/coins/images/44/large/xrp-symbol-white-128.png?1696501400' },
@@ -103,8 +109,9 @@ export class CryptoService {
 
     const now = Date.now();
     return Object.entries(baselinePrices).map(([id, info], idx) => {
-      const wave = Math.sin(now / 300000 + idx); 
-      const pctChange = wave * 3.5; 
+      const wave = Math.sin(now / 300000 + idx);
+      const isStable = id === 'tether' || id === 'usd-coin';
+      const pctChange = isStable ? wave * 0.02 : wave * 3.5;
       const currentPrice = info.price * (1 + pctChange / 100);
 
       const sparklinePrices: number[] = [];
@@ -217,12 +224,13 @@ export class CryptoService {
         `?vs_currency=usd` +
         `&ids=${SUPPORTED_COINS}` +
         `&order=market_cap_desc` +
-        `&per_page=20` +
+        `&per_page=50` +
         `&page=1` +
         `&sparkline=true` +
         `&price_change_percentage=1h,24h,7d`;
 
       const res = await fetch(url, {
+        signal: AbortSignal.timeout(8000),
         headers: {
           Accept: 'application/json',
           'User-Agent': 'IntercontinentalCrest/1.0',
@@ -255,6 +263,7 @@ export class CryptoService {
         `&community_data=false&developer_data=false&sparkline=true`;
 
       const res = await fetch(url, {
+        signal: AbortSignal.timeout(8000),
         headers: {
           Accept: 'application/json',
           'User-Agent': 'IntercontinentalCrest/1.0',
@@ -283,6 +292,7 @@ export class CryptoService {
         `?vs_currency=${currency}&days=${days}`;
 
       const res = await fetch(url, {
+        signal: AbortSignal.timeout(8000),
         headers: {
           Accept: 'application/json',
           'User-Agent': 'IntercontinentalCrest/1.0',
@@ -303,234 +313,171 @@ export class CryptoService {
   // ── Portfolio endpoints ────────────────────────────────────────────────────────
 
   async getPortfolio(userId: string) {
-    const holdings = await this.prisma.cryptoHolding.findMany({
-      where: { userId },
-      orderBy: { updatedAt: 'desc' },
-    });
-
-    const orders = await this.prisma.cryptoOrder.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: 50,
-    });
-
+    const [holdings, orders] = await Promise.all([
+      this.prisma.cryptoHolding.findMany({ where: { userId }, orderBy: { updatedAt: 'desc' } }),
+      this.prisma.cryptoOrder.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 50 }),
+    ]);
     return { holdings, orders };
   }
 
-  async buyCrypto(
-    userId: string,
-    dto: {
-      coinId: string;
-      coinSymbol: string;
-      coinName: string;
-      usdAmount: number; // how many USD to spend
-      fromAccountId: string;
-    },
-  ) {
-    if (dto.usdAmount < 1) {
-      throw new BadRequestException('Minimum purchase is $1 USD');
-    }
-
-    // 1. Fetch live price
+  private async liveCoin(coinId: string): Promise<CoinMarket> {
     const markets = await this.getLiveMarkets();
-    const coin = markets.find((c) => c.id === dto.coinId);
-    if (!coin) throw new NotFoundException(`Coin ${dto.coinId} not found`);
+    const coin = markets.find((c) => c.id === coinId);
+    if (!coin || !coin.current_price) throw new NotFoundException('This asset is not available for trading');
+    return coin;
+  }
 
+  async buyCrypto(userId: string, dto: { coinId: string; usdAmount: number; fromAccountId: string }) {
+    const coin = await this.liveCoin(dto.coinId);
+    const account = await this.prisma.account.findUnique({ where: { id: dto.fromAccountId } });
+    if (!account || account.userId !== userId) throw new NotFoundException('Account not found');
+    if (account.isFrozen) throw new BadRequestException('This account is frozen');
+
+    const gross = new Decimal(dto.usdAmount.toFixed(2));
+    const fee = gross.times(TRADING_FEE_RATE).toDecimalPlaces(2);
     const pricePerCoin = coin.current_price;
-    const fee = parseFloat((dto.usdAmount * 0.005).toFixed(8)); // 0.5% fee
-    const netUsd = dto.usdAmount - fee;
-    const quantity = parseFloat((netUsd / pricePerCoin).toFixed(8));
+    const quantity = gross.minus(fee).dividedBy(pricePerCoin).toDecimalPlaces(8);
+    if (quantity.lessThanOrEqualTo(0)) throw new BadRequestException('Amount is too small to buy any coins');
 
-    // 2. Deduct USD from bank account
-    const account = await this.prisma.account.findUnique({
-      where: { id: dto.fromAccountId },
-    });
-    if (!account) throw new NotFoundException('Account not found');
-    if (account.userId !== userId) throw new BadRequestException('Account mismatch');
-    if (account.isFrozen) throw new BadRequestException('Account is frozen');
-    if (account.availableBalance.lessThan(new Decimal(dto.usdAmount))) {
-      throw new BadRequestException('Insufficient funds');
-    }
+    const ref = { coinId: coin.id, coinSymbol: coin.symbol.toUpperCase(), coinName: coin.name };
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      // Deduct from bank account
-      await tx.account.update({
-        where: { id: dto.fromAccountId },
-        data: {
-          balance: { decrement: new Decimal(dto.usdAmount) },
-          availableBalance: { decrement: new Decimal(dto.usdAmount) },
-        },
+    const order = await this.prisma.$transaction(async (tx) => {
+      const debited = await tx.account.updateMany({
+        where: { id: account.id, isFrozen: false, availableBalance: { gte: gross } },
+        data: { balance: { decrement: gross }, availableBalance: { decrement: gross } },
       });
+      if (debited.count !== 1) throw new BadRequestException('Insufficient funds');
 
-      // Upsert holding (weighted average cost)
-      const existing = await tx.cryptoHolding.findUnique({
-        where: { userId_coinId: { userId, coinId: dto.coinId } },
-      });
+      await creditCoins(tx, userId, ref, quantity, pricePerCoin);
 
-      if (existing) {
-        const oldQty = Number(existing.quantity);
-        const oldAvg = Number(existing.avgBuyPrice);
-        const newQty = oldQty + quantity;
-        const newAvg = (oldAvg * oldQty + pricePerCoin * quantity) / newQty;
-
-        await tx.cryptoHolding.update({
-          where: { userId_coinId: { userId, coinId: dto.coinId } },
-          data: {
-            quantity: new Decimal(newQty.toFixed(8)),
-            avgBuyPrice: new Decimal(newAvg.toFixed(8)),
-          },
-        });
-      } else {
-        await tx.cryptoHolding.create({
-          data: {
-            userId,
-            coinId: dto.coinId,
-            coinSymbol: dto.coinSymbol.toUpperCase(),
-            coinName: dto.coinName,
-            quantity: new Decimal(quantity.toFixed(8)),
-            avgBuyPrice: new Decimal(pricePerCoin.toFixed(8)),
-          },
-        });
-      }
-
-      // Record the order
-      const order = await tx.cryptoOrder.create({
+      const created = await tx.cryptoOrder.create({
         data: {
           userId,
-          coinId: dto.coinId,
-          coinSymbol: dto.coinSymbol.toUpperCase(),
-          coinName: dto.coinName,
+          ...ref,
           type: 'buy',
-          quantity: new Decimal(quantity.toFixed(8)),
+          quantity,
           priceAtTime: new Decimal(pricePerCoin.toFixed(8)),
-          totalUsd: new Decimal(dto.usdAmount.toFixed(2)),
-          fee: new Decimal(fee.toFixed(2)),
+          totalUsd: gross,
+          fee,
           status: 'completed',
         },
       });
 
-      return {
-        order,
-        coinsBought: quantity,
-        priceAtTime: pricePerCoin,
-        fee,
-        message: `Successfully purchased ${quantity.toFixed(6)} ${dto.coinSymbol.toUpperCase()} for $${dto.usdAmount.toFixed(2)}`,
-      };
+      await tx.transaction.create({
+        data: {
+          transactionReference: newReference('CRY'),
+          senderAccountId: account.id,
+          receiverAccountId: null,
+          amount: gross,
+          fee: new Decimal(0),
+          currency: 'USD',
+          status: 'completed',
+          type: 'crypto_buy',
+          description: `Bought ${quantity.toString()} ${ref.coinSymbol}`,
+        },
+      });
+
+      return created;
     });
 
     try {
       await this.notificationsService.createNotification(
         userId,
-        'Crypto Asset Purchased',
-        `Successfully purchased ${result.coinsBought.toFixed(6)} ${dto.coinSymbol.toUpperCase()} at $${result.priceAtTime.toLocaleString('en-US')} per coin for a total of $${dto.usdAmount.toFixed(2)}.`,
+        `${ref.coinSymbol} purchased`,
+        `You bought ${quantity.toString()} ${ref.coinSymbol} at $${pricePerCoin.toLocaleString('en-US')} for $${gross.toFixed(2)} (fee $${fee.toFixed(2)}).`,
         'success',
       );
     } catch (err) {
       console.error('Failed to trigger buy notification:', err);
     }
 
-    return result;
+    return {
+      order,
+      coinsBought: Number(quantity),
+      priceAtTime: pricePerCoin,
+      fee: Number(fee),
+      message: `Bought ${quantity.toString()} ${ref.coinSymbol} for $${gross.toFixed(2)}`,
+    };
   }
 
-  async sellCrypto(
-    userId: string,
-    dto: {
-      coinId: string;
-      coinSymbol: string;
-      coinName: string;
-      quantity: number;
-      toAccountId: string;
-    },
-  ) {
-    if (dto.quantity <= 0) {
-      throw new BadRequestException('Quantity must be greater than 0');
-    }
+  async sellCrypto(userId: string, dto: { coinId: string; quantity: number; toAccountId: string }) {
+    const account = await this.prisma.account.findUnique({ where: { id: dto.toAccountId } });
+    if (!account || account.userId !== userId) throw new NotFoundException('Account not found');
+    if (account.isFrozen) throw new BadRequestException('This account is frozen');
 
-    // 1. Check holding
     const holding = await this.prisma.cryptoHolding.findUnique({
       where: { userId_coinId: { userId, coinId: dto.coinId } },
     });
-    if (!holding) throw new NotFoundException('You do not hold this coin');
-    if (new Decimal(holding.quantity).lessThan(new Decimal(dto.quantity))) {
-      throw new BadRequestException('Insufficient coin balance');
-    }
+    if (!holding) throw new BadRequestException('You do not hold this asset');
 
-    // 2. Fetch live price
-    const markets = await this.getLiveMarkets();
-    const coin = markets.find((c) => c.id === dto.coinId);
-    if (!coin) throw new NotFoundException(`Coin ${dto.coinId} not found`);
-
+    const coin = await this.liveCoin(dto.coinId);
+    const quantity = new Decimal(dto.quantity.toFixed(8));
     const pricePerCoin = coin.current_price;
-    const grossUsd = dto.quantity * pricePerCoin;
-    const fee = parseFloat((grossUsd * 0.005).toFixed(2)); // 0.5% fee
-    const netUsd = parseFloat((grossUsd - fee).toFixed(2));
+    const gross = quantity.times(pricePerCoin).toDecimalPlaces(2);
+    const fee = gross.times(TRADING_FEE_RATE).toDecimalPlaces(2);
+    const net = gross.minus(fee);
+    if (net.lessThanOrEqualTo(0)) throw new BadRequestException('Amount is too small to sell');
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      // Update holding
-      const newQty = parseFloat(
-        (Number(holding.quantity) - dto.quantity).toFixed(8),
-      );
+    const order = await this.prisma.$transaction(async (tx) => {
+      await debitCoins(tx, userId, dto.coinId, quantity);
 
-      if (newQty <= 0.000001) {
-        // Remove holding if dust
-        await tx.cryptoHolding.delete({
-          where: { userId_coinId: { userId, coinId: dto.coinId } },
-        });
-      } else {
-        await tx.cryptoHolding.update({
-          where: { userId_coinId: { userId, coinId: dto.coinId } },
-          data: { quantity: new Decimal(newQty.toFixed(8)) },
-        });
-      }
-
-      // Credit bank account
       await tx.account.update({
-        where: { id: dto.toAccountId },
-        data: {
-          balance: { increment: new Decimal(netUsd.toFixed(2)) },
-          availableBalance: { increment: new Decimal(netUsd.toFixed(2)) },
-        },
+        where: { id: account.id },
+        data: { balance: { increment: net }, availableBalance: { increment: net } },
       });
 
-      // Record order
-      const order = await tx.cryptoOrder.create({
+      const created = await tx.cryptoOrder.create({
         data: {
           userId,
-          coinId: dto.coinId,
-          coinSymbol: dto.coinSymbol.toUpperCase(),
-          coinName: dto.coinName,
+          coinId: holding.coinId,
+          coinSymbol: holding.coinSymbol,
+          coinName: holding.coinName,
           type: 'sell',
-          quantity: new Decimal(dto.quantity.toFixed(8)),
+          quantity,
           priceAtTime: new Decimal(pricePerCoin.toFixed(8)),
-          totalUsd: new Decimal(grossUsd.toFixed(2)),
-          fee: new Decimal(fee.toFixed(2)),
+          totalUsd: gross,
+          fee,
           status: 'completed',
         },
       });
 
-      return {
-        order,
-        coinsSold: dto.quantity,
-        priceAtTime: pricePerCoin,
-        grossUsd,
-        fee,
-        netUsd,
-        message: `Successfully sold ${dto.quantity} ${dto.coinSymbol.toUpperCase()} for $${netUsd.toFixed(2)}`,
-      };
+      await tx.transaction.create({
+        data: {
+          transactionReference: newReference('CRY'),
+          senderAccountId: null,
+          receiverAccountId: account.id,
+          amount: net,
+          fee: new Decimal(0),
+          currency: 'USD',
+          status: 'completed',
+          type: 'crypto_sell',
+          description: `Sold ${quantity.toString()} ${holding.coinSymbol}`,
+        },
+      });
+
+      return created;
     });
 
     try {
       await this.notificationsService.createNotification(
         userId,
-        'Crypto Asset Sold',
-        `Successfully sold ${dto.quantity} ${dto.coinSymbol.toUpperCase()} at $${result.priceAtTime.toLocaleString('en-US')} per coin. Total proceeds credited: $${result.netUsd.toFixed(2)}.`,
+        `${holding.coinSymbol} sold`,
+        `You sold ${quantity.toString()} ${holding.coinSymbol} at $${pricePerCoin.toLocaleString('en-US')}. $${net.toFixed(2)} was paid into ${account.accountNumber}.`,
         'success',
       );
     } catch (err) {
       console.error('Failed to trigger sell notification:', err);
     }
 
-    return result;
+    return {
+      order,
+      coinsSold: Number(quantity),
+      priceAtTime: pricePerCoin,
+      grossUsd: Number(gross),
+      fee: Number(fee),
+      netUsd: Number(net),
+      message: `Sold ${quantity.toString()} ${holding.coinSymbol} for $${net.toFixed(2)}`,
+    };
   }
 
   async getMyOrders(userId: string, page: number = 1, limit: number = 20) {

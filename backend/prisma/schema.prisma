@@ -69,12 +69,13 @@ model CryptoOrder {
   coinId      String   @map("coin_id")
   coinSymbol  String   @map("coin_symbol")
   coinName    String   @map("coin_name")
-  type        String                        // "buy" | "sell"
+  type        String                        // "buy" | "sell" | "deposit" | "withdrawal"
   quantity    Decimal
   priceAtTime Decimal  @map("price_at_time") // USD price per coin at execution
   totalUsd    Decimal  @map("total_usd")
   fee         Decimal  @default(0.00)
   status      String   @default("completed") // completed | failed
+  networkAddress String? @map("network_address") // destination for simulated withdrawals
   createdAt   DateTime @default(now()) @map("created_at")
 
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
