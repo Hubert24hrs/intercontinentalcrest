@@ -168,7 +168,9 @@ export default function OverviewPage() {
               <Link key={b.label} href={b.href} className="rounded-2xl border border-white/10 bg-white/[0.06] p-3.5 transition-colors hover:bg-white/[0.1] sm:p-4">
                 <b.icon className="size-4 text-brand-300" />
                 <p className="mt-3 text-xs text-white/55">{b.label}</p>
-                <p className="num mt-0.5 truncate text-[15px] font-semibold sm:text-base">{loading ? "…" : money(b.value)}</p>
+                <p className="num mt-0.5 truncate text-[15px] font-semibold sm:text-base" title={formatMoney(b.value)}>
+                  {loading ? "…" : hidden ? "••••" : formatMoney(b.value, { compact: true })}
+                </p>
               </Link>
             ))}
           </div>
