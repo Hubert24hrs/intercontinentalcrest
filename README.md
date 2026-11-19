@@ -10,7 +10,7 @@ Intercontinental Crest is a demonstration platform. It is not a bank, holds no c
 | --- | --- |
 | Web app (`frontend/`) | Next.js 16 (App Router, Turbopack), React 19, Tailwind CSS 4, Radix UI, Recharts |
 | API (`backend/`) | NestJS 10, Prisma 5, PostgreSQL (Neon in production) |
-| Hosting | Vercel (two projects, deployed by GitHub Actions on push to `master`) |
+| Hosting | Vercel: `intercontinentalcrest` (web app, root `frontend`) and `intercontinentalcrest-backend` (API, root `backend`), deployed by Vercel's GitHub integration on every push to `master` |
 
 The browser only talks to the web app's own origin. Requests to `/api/*` are proxied to the API by a Next.js rewrite, so sessions use first party httpOnly cookies and no tokens are kept in `localStorage`.
 
@@ -48,7 +48,7 @@ See `.env.example`. The important ones:
 | `RESEND_API_KEY` | API | Sends email. Without it, emails go to `backend/mails/sent_mails.log` |
 | `BACKEND_URL` | Web app | API origin for the `/api` proxy (set at build time) |
 
-To change the super admin password in production, update `ADMIN_PASSWORD` in the backend's Vercel project settings and redeploy the backend.
+To change the super admin password in production, update `ADMIN_PASSWORD` in the `intercontinentalcrest-backend` Vercel project settings and redeploy it.
 
 ## Tests
 
