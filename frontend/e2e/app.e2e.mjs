@@ -24,7 +24,7 @@ const HEADLESS = process.env.HEADED ? false : true;
 
 const results = [];
 const stamp = Date.now().toString(36);
-const customer = { first: "Ada", last: `Tester${stamp}`, email: `e2e.ui.${stamp}@example.com`, password: `Ui-Passw0rd-${stamp}` };
+const customer = { first: "Emily", last: `Tester${stamp}`, email: `e2e.ui.${stamp}@example.com`, password: `Ui-Passw0rd-${stamp}` };
 
 async function step(name, fn) {
   const t0 = Date.now();
@@ -331,7 +331,7 @@ async function main() {
   await step("reply in the support inbox", async () => {
     await page.goto(`${BASE}/admin/support`);
     await page.getByRole("button", { name: new RegExp(customer.last) }).first().click();
-    await page.getByText("Hello from the end-to-end test").waitFor({ timeout: 20000 });
+    await page.getByText("Hello from the end-to-end test").last().waitFor({ timeout: 20000 });
     await page.getByLabel("Reply", { exact: true }).fill("Thanks, we're on it!");
     await page.getByRole("button", { name: "Send reply" }).click();
     await page.locator("p", { hasText: "Thanks, we're on it!" }).last().waitFor({ timeout: 20000 });

@@ -114,7 +114,7 @@ export default function HomePage() {
               <div className="space-y-4 p-6">
                 {[
                   ["From", "Everyday Checking •••• 4821"],
-                  ["To", "Ada Okafor · IC7731049920"],
+                  ["To", "Emily Carter · IC7731049920"],
                   ["Amount", "$1,250.00"],
                   ["Arrives", "Instantly"],
                 ].map(([k, v]) => (

@@ -28,6 +28,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { ButtonLink } from "@/components/ui/Button";
 import { EmptyState, Skeleton } from "@/components/ui/misc";
 import { TxRow, type Tx } from "@/components/app/TxRow";
+import { MarketTicker } from "@/components/marketing/MarketTicker";
 import { cn } from "@/lib/cn";
 
 const PIE_COLORS = ["#0e7c74", "#0b1f33", "#c79a45", "#45b5aa", "#2a5680", "#98a2b3", "#7bd0c6"];
@@ -124,6 +125,8 @@ export default function OverviewPage() {
 
   return (
     <div className="space-y-6">
+      <MarketTicker variant="card" />
+
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-sm text-fg-subtle">{new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>

@@ -8,7 +8,11 @@ import { cn } from "@/lib/cn";
 
 type Quote = { symbol: string; name: string; price: number; pct: number };
 
-export function MarketTicker({ tone = "light" }: { tone?: "light" | "dark" }) {
+/**
+ * Scrolling price strip (moves right to left, pauses on hover).
+ * variant "band" spans a page section; "card" is a rounded strip for use inside the app.
+ */
+export function MarketTicker({ tone = "light", variant = "band" }: { tone?: "light" | "dark"; variant?: "band" | "card" }) {
   const [quotes, setQuotes] = useState<Quote[]>([]);
 
   useEffect(() => {
@@ -35,16 +39,18 @@ export function MarketTicker({ tone = "light" }: { tone?: "light" | "dark" }) {
   }, []);
 
   const dark = tone === "dark";
+  const card = variant === "card";
+  const frame = card
+    ? cn("rounded-2xl border", dark ? "border-white/10 bg-ink-950 text-white" : "border-line bg-white text-fg")
+    : cn("border-y", dark ? "border-white/10 bg-ink-950 text-white" : "border-line bg-surface text-fg");
+  const fade = dark ? "from-ink-950" : card ? "from-white" : "from-surface";
   if (!quotes.length) {
-    return <div className={cn("h-11 border-y", dark ? "border-white/10 bg-ink-950" : "border-line bg-surface")} aria-hidden />;
+    return <div className={cn("h-11", frame)} aria-hidden />;
   }
 
   const items = [...quotes, ...quotes];
   return (
-    <div
-      className={cn("group relative overflow-hidden border-y", dark ? "border-white/10 bg-ink-950 text-white" : "border-line bg-surface text-fg")}
-      aria-label="Market prices (illustrative, may be delayed)"
-    >
+    <div className={cn("group relative overflow-hidden", frame)} aria-label="Market prices (may be delayed)">
       <div className="flex w-max animate-ticker group-hover:[animation-play-state:paused]">
         {items.map((q, i) => {
           const up = q.pct >= 0;
@@ -61,8 +67,8 @@ export function MarketTicker({ tone = "light" }: { tone?: "light" | "dark" }) {
           );
         })}
       </div>
-      <div className={cn("pointer-events-none absolute inset-y-0 left-0 w-16 bg-gradient-to-r", dark ? "from-ink-950" : "from-surface")} />
-      <div className={cn("pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l", dark ? "from-ink-950" : "from-surface")} />
+      <div className={cn("pointer-events-none absolute inset-y-0 left-0 w-16 bg-gradient-to-r", fade)} />
+      <div className={cn("pointer-events-none absolute inset-y-0 right-0 w-16 bg-gradient-to-l", fade)} />
     </div>
   );
 }

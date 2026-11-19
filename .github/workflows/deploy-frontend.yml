@@ -5,12 +5,16 @@ on:
     branches: [master]
     paths:
       - "frontend/**"
+      - ".github/workflows/deploy-frontend.yml"
   workflow_dispatch:
 
 env:
   VERCEL_ORG_ID: team_Vzw9dPqgnCeaflj1qX56NfaJ
   VERCEL_PROJECT_ID: prj_xwrcgBXHAXxjp62cP5wWmdGJ7E4e
 
+# The Vercel project's Root Directory is "frontend", so the Vercel CLI runs from
+# the repository root and applies that setting itself. Running it from inside
+# frontend/ makes Vercel look for frontend/frontend and the build fails.
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -27,13 +31,10 @@ jobs:
         run: npm install -g vercel@latest
 
       - name: Pull Vercel environment
-        working-directory: frontend
         run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Build
-        working-directory: frontend
         run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Deploy to production
-        working-directory: frontend
         run: vercel deploy --prebuilt --prod --archive=tgz --token=${{ secrets.VERCEL_TOKEN }}
